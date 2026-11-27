@@ -289,3 +289,21 @@ lookup_tables.append(('env_expo', env_expo / env_expo.max() * 65535.0))
 # lookup_tables.append(('env_linear', env_linear / env_linear.max() * 65535.0))
 # use existing folded sine waveshaper table instead of this wiggle
 # lookup_tables.append(('env_wiggly', env_wiggly / env_wiggly.max() * 65535.0))
+
+
+
+"""----------------------------------------------------------------------------
+TPT / ZDF state-variable filter cutoff (output filter, see output_filter.h)
+
+g = tan(pi * fc / fs), stored in Q28.
+Index i covers MIDI note 12 + i / 2 (half-semitone steps, 257 entries,
+MIDI 12 = 16.35 Hz up to MIDI 140). fc is clamped at fs / 4 = 24 kHz, so
+g <= 1.0 and the coefficient arithmetic in output_filter.h cannot overflow.
+----------------------------------------------------------------------------"""
+
+tpt_notes = 12.0 + numpy.arange(0, 257) * 0.5
+tpt_frequencies = 440.0 * 2 ** ((tpt_notes - 69.0) / 12.0)
+tpt_frequencies = numpy.minimum(tpt_frequencies, sample_rate / 4.0)
+tpt_g = numpy.tan(numpy.pi * tpt_frequencies / sample_rate)
+lookup_tables_32.append(
+    ('tpt_g', numpy.round(tpt_g * (1 << 28)).astype(int)))

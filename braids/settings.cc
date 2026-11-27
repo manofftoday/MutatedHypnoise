@@ -126,6 +126,12 @@ const SettingsData kInitSettings = {
   0,                    // turing_init
   0,                    // musical_scale
   false,                // edit wrap
+  0,                    // filter_mode = OFF
+  127,                  // filter_cutoff (fully open)
+  0,                    // filter_resonance
+  0,                    // filter_tracking = OFF
+  31,                   // filter_env1 = 0
+  31,                   // filter_env2 = 0
   0,                    // padding
   50,                   // pitch_cv_offset
   15401,                // pitch_cv_scale
@@ -184,16 +190,10 @@ const char* const algo_values[] = {
     "\x8E\x8E\x8E\x8E",
     "\x88\x88x3",
     "\x8C_x3",
-    "/\\x3",
+    "/\x3",
     "SIx3",
-    "RING",
     "\x88\x89\x88\x89",
     "\x88\x88\x8E\x8E",
-    "TOY*",
-    "ZLPF",
-    "ZPKF",
-    "ZBPF",
-    "ZHPF",
     "VOSM",
     "VOWL",
     "VFOF",
@@ -205,24 +205,13 @@ const char* const algo_values[] = {
     "BLOW",
     "FLUT",
     "BELL",
-    "DRUM",
-    "KICK",
-    "CYMB",
-    "SNAR",
     "WTBL",
     "WMAP",
     "WLIN",
     "WTx4",
-    // "NOIS",
-    // "TWNQ",
     "CLKN",
     "CLOU",
-    // "PRTC",
-    "BYT0",
-    "BYT1",
-    "BYT2",
-    "BYT3",
-    "ZERO", // this is the RenderSilence digital model 
+    "ZERO", // RenderSilence
 };
 
 const char* const bits_values[] = {
@@ -520,7 +509,12 @@ const char* const meta_values[] = {
     "SRAT", // 15 
     "SMUT", // 16 = BITS + SRAT 
     "FCKD", // 17 = BITS + SRAT + JITR 
+    "FLTR", // 18 = output filter cutoff
 };
+
+const char* const filter_mode_values[] = { "OFF", "LPF", "HPF", "BPF" };
+
+const char* const filter_tracking_values[] = { "OFF", "HALF", "FULL" };
 
 const char* const mod_shape_values[] = { 
     "EXPO",  // 0 exponentially-curved triangle
@@ -613,7 +607,7 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 1, "RINV", boolean_values },
   { 0, 1, "TSRC", trig_source_values },
   { 0, 6, "TDLY", trig_delay_values },
-  { 0, 17, "FMCV", meta_values },
+  { 0, 18, "FMCV", meta_values },
   { 0, 4, "RANG", pitch_range_values }, // enable LFO pitch range
   { 0, 4, "OCTV", octave_values },
   { 0, PITCH_QUANTIZATION_LAST - 1, "QNTZ", quantization_values },
@@ -691,9 +685,15 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 127, "SEED", mod_rate_values },
   { 0, 25, "SCAL", musical_scale_values },
   { 0, 1, "WRAP", boolean_values },
+  { 0, 3, "FMOD", filter_mode_values },
+  { 0, 127, "FCUT", mod_rate_values },
+  { 0, 127, "FRES", mod_rate_values },
+  { 0, 2, "FTRK", filter_tracking_values },
+  { 0, 62, "FEN1", bipolar_values },
+  { 0, 62, "FEN2", bipolar_values },
   { 0, 0, "CAL.", NULL },
   { 0, 0, "    ", NULL },  // Placeholder for CV tester
-  { 0, 0, "v4.1", NULL },  // Placeholder for version string
+  { 0, 0, "h0.1", NULL },  // Placeholder for version string
 };
 
 /* static */
@@ -701,6 +701,12 @@ const Setting Settings::settings_order_[] = {
   SETTING_OSCILLATOR_SHAPE,
   SETTING_INITIAL_GAIN,
   SETTING_META_MODULATION,
+  SETTING_FILTER_MODE,
+  SETTING_FILTER_CUTOFF,
+  SETTING_FILTER_RESONANCE,
+  SETTING_FILTER_TRACKING,
+  SETTING_FILTER_ENV1,
+  SETTING_FILTER_ENV2,
   SETTING_MOD1_MODE,
   SETTING_MOD1_RATE,
   SETTING_MOD1_AD_RATIO,

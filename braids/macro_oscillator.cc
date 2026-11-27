@@ -365,7 +365,7 @@ void MacroOscillator::RenderDigital(
   digital_oscillator_.set_parameters(parameter_[0], parameter_[1]);
   digital_oscillator_.set_pitch(pitch_);
   digital_oscillator_.set_shape(static_cast<DigitalOscillatorShape>(
-      shape_ - MACRO_OSC_SHAPE_TRIPLE_RING_MOD));
+      shape_ - MACRO_OSC_SHAPE_SAW_SWARM));
   digital_oscillator_.Render(sync, buffer, size);
 }
 
@@ -397,7 +397,6 @@ MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
   &MacroOscillator::RenderTripleSineTriangle,
   &MacroOscillator::RenderTripleSineTriangle,
   &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderSawComb,
   &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderDigital,
@@ -417,23 +416,6 @@ MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
   &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital, 
-  &MacroOscillator::RenderDigital, 
-  &MacroOscillator::RenderDigital,
-  // &MacroOscillator::RenderDigital, // was twin peaks noise
-  // &MacroOscillator::RenderDigital, // was FilteredNoise
-  &MacroOscillator::RenderDigital,
-  &MacroOscillator::RenderDigital,
-  // &MacroOscillator::RenderDigital, // was ParticleNoise
-  &MacroOscillator::RenderDigital, // for RenderBytebeat0  
-  &MacroOscillator::RenderDigital, // for RenderBytebeat1  
-  &MacroOscillator::RenderDigital, // for RenderBytebeat2  
-  &MacroOscillator::RenderDigital, // for RenderBytebeat3  
-  &MacroOscillator::RenderDigital, // for RenderSilence  
 };
 
 }  // namespace braids

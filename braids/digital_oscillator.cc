@@ -49,8 +49,6 @@ static const uint16_t kHighestNote = 140 * 128;
 static const uint16_t kPitchTableStart = 128 * 128;
 static const uint16_t kOctave = 12 * 128;
 
-static const uint32_t kFIR4Coefficients[4] = { 10530, 14751, 16384, 14751 };
-static const uint32_t kFIR4DcOffset = 28208;
 
 uint32_t DigitalOscillator::ComputePhaseIncrement(int16_t midi_pitch) {
   if (midi_pitch >= kPitchTableStart) {
@@ -128,41 +126,6 @@ void DigitalOscillator::Render(
   }
 
   (this->*fn)(sync, buffer, size);
-}
-
-void DigitalOscillator::RenderTripleRingMod(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  uint32_t phase = phase_ + (1L << 30);
-  uint32_t increment = phase_increment_;
-  uint32_t modulator_phase = state_.vow.formant_phase[0];
-  uint32_t modulator_phase_2 = state_.vow.formant_phase[1];
-  uint32_t modulator_phase_increment = ComputePhaseIncrement(
-    pitch_ + ((parameter_[0] - 16384) >> 2)
-  );
-  uint32_t modulator_phase_increment_2 = ComputePhaseIncrement(
-    pitch_ + ((parameter_[1] - 16384) >> 2)
-  );
-  
-  while (size--) {
-    phase += increment;
-    if (*sync++) {
-      phase = 0;
-      modulator_phase = 0;
-      modulator_phase_2 = 0;
-    }
-    modulator_phase += modulator_phase_increment;
-    modulator_phase_2 += modulator_phase_increment_2;
-    int16_t result = Interpolate824(wav_sine, phase);
-    result = result * Interpolate824(wav_sine, modulator_phase) >> 16;
-    result = result * Interpolate824(wav_sine, modulator_phase_2) >> 16;
-    result = Interpolate88(ws_moderate_overdrive, result + 32768);
-    *buffer++ = result;
-  }
-  phase_ = phase - (1L << 30);
-  state_.vow.formant_phase[0] = modulator_phase;
-  state_.vow.formant_phase[1] = modulator_phase_2;
 }
 
 void DigitalOscillator::RenderSawSwarm(
@@ -284,123 +247,6 @@ void DigitalOscillator::RenderComb(
     delay_ptr = (delay_ptr + 1) % kCombDelayLength;
   }
   phase_ = delay_ptr;
-}
-
-void DigitalOscillator::RenderToy(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  // 4 times oversampling.
-  phase_increment_ >>= 2;
-  
-  uint32_t phase_increment = phase_increment_;
-  uint32_t phase = phase_;
-  
-  uint16_t decimation_counter = state_.toy.decimation_counter;
-  uint16_t decimation_count = 512 - (parameter_[0] >> 6);
-
-  uint8_t held_sample = state_.toy.held_sample;
-  while (size--) {
-    int32_t filtered_sample = 0;
-    if (*sync++) {
-      phase = 0;
-    } 
-    for (size_t tap = 0; tap < 4; ++tap) {
-      phase += phase_increment;
-      if (decimation_counter >= decimation_count) {
-        uint8_t x = parameter_[1] >> 8;
-        held_sample = (((phase >> 24) ^ (x << 1)) & (~x)) + (x >> 1);
-        decimation_counter = 0;
-      }
-      filtered_sample += kFIR4Coefficients[tap] * held_sample;
-      ++decimation_counter;
-    }
-    *buffer++ = (filtered_sample >> 8) - kFIR4DcOffset;
-  }
-  state_.toy.held_sample = held_sample;
-  state_.toy.decimation_counter = decimation_counter;
-  phase_ = phase;
-}
- 
-const uint32_t kPhaseReset[] = {
-  0,
-  0x80000000,
-  0x40000000,
-  0x80000000
-};
-
-void DigitalOscillator::RenderDigitalFilter(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  int16_t shifted_pitch = pitch_ + ((parameter_[0] - 2048) >> 1);
-  if (shifted_pitch > 16383) {
-    shifted_pitch = 16383;
-  }
-  uint32_t modulator_phase_increment = ComputePhaseIncrement(shifted_pitch);
-  uint32_t modulator_phase = state_.res.modulator_phase;
-  uint32_t square_modulator_phase = state_.res.square_modulator_phase;
-  int32_t square_integrator = state_.res.integrator;
-  
-  uint8_t filter_type = shape_ - OSC_SHAPE_DIGITAL_FILTER_LP;
-  uint16_t integrator_gain = (modulator_phase_increment >> 14);
-  
-  while (size--) {
-    phase_ += phase_increment_;
-    modulator_phase += modulator_phase_increment;
-    
-    if (*sync++) {
-      state_.res.polarity = 1;
-      phase_ = 0;
-      modulator_phase = 0;
-      square_modulator_phase = 0;
-      square_integrator = 0;
-    }
-    
-    square_modulator_phase += modulator_phase_increment;
-    if (phase_ < phase_increment_) {
-      modulator_phase = kPhaseReset[filter_type];
-    }
-    if ((phase_ << 1) < (phase_increment_ << 1)) {
-      state_.res.polarity = !state_.res.polarity;
-      square_modulator_phase = kPhaseReset[(filter_type & 1) + 2];
-    }
-    
-    int32_t carrier = Interpolate824(wav_sine, modulator_phase);
-    int32_t square_carrier = Interpolate824(wav_sine, square_modulator_phase);
-    
-    uint16_t saw = ~(phase_ >> 16);
-    uint16_t double_saw = ~(phase_ >> 15);
-    uint16_t triangle = (phase_ >> 15) ^ (phase_ & 0x80000000 ? 0xffff : 0x0000);
-    uint16_t window = parameter_[1] < 16384 ? saw : triangle;
-
-    int32_t pulse = (square_carrier * double_saw) >> 16;
-    if (state_.res.polarity) {
-      pulse = -pulse;
-    }
-    square_integrator += (pulse * integrator_gain) >> 16;
-    CLIP(square_integrator)
-    
-    int16_t saw_tri_signal;
-    int16_t square_signal;
-    
-    if (filter_type & 2) {
-      saw_tri_signal = (carrier * window) >> 16;
-      square_signal = pulse;
-    } else {
-      saw_tri_signal = (window * (carrier + 32768) >> 16) - 32768;
-      square_signal = square_integrator;
-      if (filter_type == 1) {
-        square_signal = (pulse + square_integrator) >> 1;
-      }
-    }
-    uint16_t balance = (parameter_[1] < 16384 ? 
-                        parameter_[1] : ~parameter_[1]) << 2;
-    *buffer++ = Mix(saw_tri_signal, square_signal, balance);
-  }
-  state_.res.modulator_phase = modulator_phase;
-  state_.res.square_modulator_phase = square_modulator_phase;
-  state_.res.integrator = square_integrator;
 }
 
 void DigitalOscillator::RenderVosim(
@@ -836,22 +682,6 @@ static uint16_t kBellPartialDecayShort[] = {
   65308, 65283, 65186, 65123, 64839, 64889, 64632, 64409, 64038, 63302, 62575
 };
 
-static int16_t kDrumPartials[] = {
-  0, 0, 1041, 1747, 1846, 3072
-};
-
-static int16_t kDrumPartialAmplitude[] = {
-  16986, 2654, 3981, 5308, 3981, 2985
-};
-
-static uint16_t kDrumPartialDecayLong[] = {
-  65533, 65531, 65531, 65531, 65531, 65516
-};
-
-static uint16_t kDrumPartialDecayShort[] = {
-  65083, 64715, 64715, 64715, 64715, 62312
-};
-
 void DigitalOscillator::RenderStruckBell(
     const uint8_t* sync,
     int16_t* buffer,
@@ -915,104 +745,6 @@ void DigitalOscillator::RenderStruckBell(
     previous_sample = out;
   }
   state_.add.previous_sample = previous_sample;
-}
-
-void DigitalOscillator::RenderStruckDrum(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  
-  if (strike_) {
-    bool reset_phase = state_.add.partial_amplitude[0] < 1024;
-    for (size_t i = 0; i < kNumDrumPartials; ++i) {
-      state_.add.target_partial_amplitude[i] = kDrumPartialAmplitude[i];
-      if (reset_phase) {
-        state_.add.partial_phase[i] = (1L << 30);
-      }
-    }
-    strike_ = false;
-  } else {
-    if (parameter_[0] < 32000) {
-      for (size_t i = 0; i < kNumDrumPartials; ++i) {
-        int32_t decay_long = kDrumPartialDecayLong[i];
-        int32_t decay_short = kDrumPartialDecayShort[i];
-        int16_t balance = (32767 - parameter_[0]) >> 8;
-        balance = balance * balance >> 7;
-        int32_t decay = decay_long - ((decay_long - decay_short) * balance >> 7);
-        state_.add.target_partial_amplitude[i] = \
-            state_.add.partial_amplitude[i] * decay >> 16;
-      }
-    }
-  }
-  
-  for (size_t i = 0; i < kNumDrumPartials; ++i) {
-    int16_t partial_pitch = pitch_ + kDrumPartials[i];
-    state_.add.partial_phase_increment[i] = ComputePhaseIncrement(partial_pitch) << 1;
-  }
-  
-  int16_t previous_sample = state_.add.previous_sample;
-  int32_t cutoff = (pitch_ - 12 * 128) + (parameter_[1] >> 2);
-  if (cutoff < 0) {
-    cutoff = 0;
-  } else if (cutoff > 32767) {
-    cutoff = 32767;
-  }
-  int32_t f = Interpolate824(lut_svf_cutoff, cutoff << 16);
-  int32_t lp_state_0 = state_.add.lp_noise[0];
-  int32_t lp_state_1 = state_.add.lp_noise[1];
-  int32_t lp_state_2 = state_.add.lp_noise[2];
-  int32_t harmonics_gain = parameter_[1] < 12888 ? (parameter_[1] + 4096) : 16384;
-  int32_t noise_mode_gain = parameter_[1] < 16384 ? 0 : parameter_[1] - 16384;
-  noise_mode_gain = noise_mode_gain * 12888 >> 14;
-
-  int32_t fade_increment = 65536 / size;
-  int32_t fade = 0;
-  while (size--) {
-    fade += fade_increment;
-    int32_t harmonics = 0;
-
-    int32_t noise = Random::GetSample();
-    if (noise > 16384) {
-      noise = 16384;
-    }
-    if (noise < -16384) {
-      noise = -16384;
-    }
-    lp_state_0 += (noise - lp_state_0) * f >> 15;
-    lp_state_1 += (lp_state_0 - lp_state_1) * f >> 15;
-    lp_state_2 += (lp_state_1 - lp_state_2) * f >> 15;
-
-    int32_t partials[kNumDrumPartials];
-    for (size_t i = 0; i < kNumDrumPartials; ++i) {
-      AdditiveState* a = &state_.add;
-      a->partial_phase[i] += a->partial_phase_increment[i];
-      int32_t partial = Interpolate824(wav_sine, a->partial_phase[i]);
-      int32_t amplitude = a->partial_amplitude[i] + \
-          (((a->target_partial_amplitude[i] - a->partial_amplitude[i]) * fade) >> 15);
-      partial = partial * amplitude >> 16;
-      harmonics += partial;
-      partials[i] = partial;
-    }
-    int32_t sample = partials[0];
-    int32_t noise_mode_1 = partials[1] * lp_state_2 >> 8;
-    int32_t noise_mode_2 = partials[3] * lp_state_2 >> 9;
-    sample += noise_mode_1 * (12288 - noise_mode_gain) >> 14;
-    sample += noise_mode_2 * noise_mode_gain >> 14;
-    sample += harmonics * harmonics_gain >> 14;
-    CLIP(sample)
-    //sample = Interpolate88(ws_moderate_overdrive, sample + 32768);
-    *buffer++ = (sample + previous_sample) >> 1;
-    *buffer++ = sample; size--;
-    previous_sample = sample;
-  }
-  state_.add.previous_sample = previous_sample;
-  state_.add.lp_noise[0] = lp_state_0;
-  state_.add.lp_noise[1] = lp_state_1;
-  state_.add.lp_noise[2] = lp_state_2;
-  for (size_t i = 0; i < kNumBellPartials; ++i) {
-    AdditiveState* a = &state_.add;
-    a->partial_amplitude[i] = a->target_partial_amplitude[i];
-  }
 }
 
 void DigitalOscillator::RenderPlucked(
@@ -2094,218 +1826,6 @@ void DigitalOscillator::RenderGranularCloud(
 // }
 */
 
-void DigitalOscillator::RenderKick(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  if (init_) {
-    pulse_[0].Init();
-    pulse_[0].set_delay(0);
-    pulse_[0].set_decay(3340);
-
-    pulse_[1].Init();
-    pulse_[1].set_delay(1.0e-3 * 48000);
-    pulse_[1].set_decay(3072);
-
-    pulse_[2].Init();
-    pulse_[2].set_delay(4.0e-3 * 48000);
-    pulse_[2].set_decay(4093);
-
-    svf_[0].Init();
-    svf_[0].set_punch(32768);
-    svf_[0].set_mode(SVF_MODE_BP);
-    init_ = false;
-  }
-  
-  if (strike_) {
-    strike_ = false;
-    pulse_[0].Trigger(12 * 32768 * 0.7);
-    pulse_[1].Trigger(-19662 * 0.7);
-    pulse_[2].Trigger(18000);
-    svf_[0].set_punch(24000);
-  }
-  
-  uint32_t decay = parameter_[0];
-  uint32_t scaled = 65535 - (decay << 1);
-  uint32_t squared = scaled * scaled >> 16;
-  scaled = squared * scaled >> 18;
-  svf_[0].set_resonance(32768 - 128 - scaled);
-  
-  uint32_t coefficient = parameter_[1];
-  coefficient = coefficient * coefficient >> 15;
-  coefficient = coefficient * coefficient >> 15;
-  int32_t lp_coefficient = 128 + (coefficient >> 1) * 3;
-  int32_t lp_state = state_.svf.lp;
-  
-  while (size) {
-    int32_t excitation = 0;
-    excitation += pulse_[0].Process();
-    excitation += !pulse_[1].done() ? 16384 : 0;
-    excitation += pulse_[1].Process();
-    pulse_[2].Process();
-    svf_[0].set_frequency(pitch_ + (pulse_[2].done() ? 0 : 17 << 7));
-    
-    for (int32_t j = 0; j < 2; ++j) {
-      int32_t resonator_output, output;
-      resonator_output = (excitation >> 4) + svf_[0].Process(excitation);
-      lp_state += (resonator_output - lp_state) * lp_coefficient >> 15;
-      CLIP(lp_state);
-      output = lp_state;
-      *buffer++ = output;
-    }
-    size -= 2;
-  }
-  
-  state_.svf.lp = lp_state;
-}
-
-void DigitalOscillator::RenderSnare(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  if (init_) {
-    pulse_[0].Init();
-    pulse_[0].set_delay(0);
-    pulse_[0].set_decay(1536);
-
-    pulse_[1].Init();
-    pulse_[1].set_delay(1e-3 * 48000);
-    pulse_[1].set_decay(3072);
-
-    pulse_[2].Init();
-    pulse_[2].set_delay(1e-3 * 48000);
-    pulse_[2].set_decay(1200);
-  
-    pulse_[3].Init();
-    pulse_[3].set_delay(0);
-  
-    svf_[0].Init();
-
-    svf_[1].Init();
-
-    svf_[2].Init();
-    svf_[2].set_resonance(2000);
-    svf_[2].set_mode(SVF_MODE_BP);
-
-    init_ = false;
-  }
-  
-  if (strike_) {
-    int32_t decay = 49152 - pitch_;
-    decay += parameter_[1] < 16384 ? 0 : parameter_[1] - 16384;
-    if (decay > 65535) {
-      decay = 65535;
-    }
-    svf_[0].set_resonance(29000 + (decay >> 5));
-    svf_[1].set_resonance(26500 + (decay >> 5));
-    pulse_[3].set_decay(4092 + (decay >> 14));
-    
-    pulse_[0].Trigger(15 * 32768);
-    pulse_[1].Trigger(-1 * 32768);
-    pulse_[2].Trigger(13107);
-    int32_t snappy = parameter_[1];
-    if (snappy >= 14336) {
-      snappy = 14336;
-    }
-    pulse_[3].Trigger(512 + (snappy << 1));
-    strike_ = false;
-  }
-  
-  svf_[0].set_frequency(pitch_ + (12 << 7));
-  svf_[1].set_frequency(pitch_ + (24 << 7));
-  svf_[2].set_frequency(pitch_ + (60 << 7));
-  
-  int32_t g_1 = 22000 - (parameter_[0] >> 1);
-  int32_t g_2 = 22000 + (parameter_[0] >> 1);
-
-  while (size) {
-    int32_t excitation_1 = 0;
-    excitation_1 += pulse_[0].Process();
-    excitation_1 += pulse_[1].Process();
-    excitation_1 += !pulse_[1].done() ? 2621 : 0;
-    
-    int32_t excitation_2 = 0;
-    excitation_2 += pulse_[2].Process();
-    excitation_2 += !pulse_[2].done() ? 13107 : 0;
-    
-    int32_t noise_sample = Random::GetSample() * pulse_[3].Process() >> 15;
-    
-    int32_t sd = 0;
-    sd += (svf_[0].Process(excitation_1) + (excitation_1 >> 4)) * g_1 >> 15;
-    sd += (svf_[1].Process(excitation_2) + (excitation_2 >> 4)) * g_2 >> 15;
-    sd += svf_[2].Process(noise_sample);
-    CLIP(sd);
-    
-    *buffer++ = sd;
-    *buffer++ = sd;
-    size -= 2;
-  }
-}
-
-void DigitalOscillator::RenderCymbal(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-  if (init_) {
-    svf_[0].Init();
-    svf_[0].set_mode(SVF_MODE_BP);
-    svf_[0].set_resonance(12000);
-    svf_[1].Init();
-    svf_[1].set_mode(SVF_MODE_HP);
-    svf_[1].set_resonance(2000);
-    init_ = false;
-  }
-  
-  HatState* hat = &state_.hat;
-
-  uint32_t increments[7];
-  int32_t note = (40 << 7) + (pitch_ >> 1);
-  increments[0] = ComputePhaseIncrement(note);
-  
-  uint32_t root = increments[0] >> 10;
-  increments[1] = root * 24273 >> 4;
-  increments[2] = root * 12561 >> 4;
-  increments[3] = root * 18417 >> 4;
-  increments[4] = root * 22452 >> 4;
-  increments[5] = root * 31858 >> 4;
-  increments[6] = increments[0] * 24;
-
-  int32_t xfade = parameter_[1];
-  svf_[0].set_frequency(parameter_[0] >> 1);
-  svf_[1].set_frequency(parameter_[0] >> 1);
-  
-  while (size--) {
-    phase_ += increments[6];
-    if (phase_ < increments[6]) {
-      hat->rng_state = hat->rng_state * 1664525L + 1013904223L;
-    }
-    hat->phase[0] += increments[0];
-    hat->phase[1] += increments[1];
-    hat->phase[2] += increments[2];
-    hat->phase[3] += increments[3];
-    hat->phase[4] += increments[4];
-    hat->phase[5] += increments[5];
-    
-    int32_t hat_noise = 0;
-    hat_noise += hat->phase[0] >> 31;
-    hat_noise += hat->phase[1] >> 31;
-    hat_noise += hat->phase[2] >> 31;
-    hat_noise += hat->phase[3] >> 31;
-    hat_noise += hat->phase[4] >> 31;
-    hat_noise += hat->phase[5] >> 31;
-    hat_noise -= 3;
-    hat_noise *= 5461;
-    hat_noise = svf_[0].Process(hat_noise);
-    CLIP(hat_noise)
-    
-    int32_t noise = (hat->rng_state >> 16) - 32768;
-    noise = svf_[1].Process(noise >> 1);
-    CLIP(noise)
-    
-    *buffer++ = hat_noise + ((noise - hat_noise) * xfade >> 15);
-  }
-}
-
 void DigitalOscillator::RenderSilence(
     const uint8_t* sync,
     int16_t* buffer,
@@ -2315,84 +1835,10 @@ void DigitalOscillator::RenderSilence(
   }
 }
 
-void DigitalOscillator::RenderBytebeat0(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-    uint32_t p0 = parameter_[0] >> 9;
-    uint32_t p1 = parameter_[1] >> 11;
-    uint16_t bytepitch = (16384 - pitch_) >> 11 ; // was 12
-  while (size--) {
-    ++phase_;
-    if (phase_ % bytepitch == 0) ++t_; 
-    // from http://royal-paw.com/2012/01/bytebeats-in-c-and-python-generative-symphonies-from-extremely-small-programs/
-    // (atmospheric, hopeful)
-    int32_t sample = ( ( ((t_*3) & (t_>>10)) | ((t_*p0) & (t_>>10)) | ((t_*10) & ((t_>>8)*p1) & 128) ) & 0xFF) << 8;
-    // int32_t sample = (( ((t_*((t_>>8) | (t_>>9))) & p0 & (t_>>8)) ^ ((t_ & (t_>>p1)) | (t_>>6)) ) & 0xFF) << 8;
-    *buffer++ = sample;
-  }
-}
-
-void DigitalOscillator::RenderBytebeat1(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-    uint32_t p0 = parameter_[0] >> 11;
-    uint32_t p1 = parameter_[1] >> 11;
-    uint16_t bytepitch = (16384 - pitch_) >> 11 ; // was 12
-  while (size--) {
-    ++phase_;
-    if (phase_ % bytepitch == 0) ++t_; 
-    // equation by stephth via https://www.youtube.com/watch?v=tCRPUv8V22o at 3:38
-    int32_t sample = ((((t_*p0) & (t_>>4)) | ((t_*5) &
-                      (t_>>7)) | ((t_*p1) & (t_>>10)))
-                       & 0xFF) << 8;
-    *buffer++ = sample;
-  }
-}
-
-void DigitalOscillator::RenderBytebeat2(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-    uint32_t p0 = parameter_[0] >> 11;
-    uint32_t p1 = parameter_[1] >> 11;
-    uint16_t bytepitch = (16384 - pitch_) >> 11 ; // was 12
-  while (size--) {
-    ++phase_;
-    if (phase_ %  bytepitch == 0) ++t_; 
-    // This one is from http://www.reddit.com/r/bytebeat/comments/20km9l/cool_equations/ (t>>13&t)*(t>>8)
-    int32_t sample = ( (((t_ >> p0) & t_) * (t_ >> p1)) & 0xFF) << 8 ;
-    *buffer++ = sample;
-  }
-}
-
-void DigitalOscillator::RenderBytebeat3(
-    const uint8_t* sync,
-    int16_t* buffer,
-    uint8_t size) {
-    uint32_t p0 = parameter_[0] >> 11;
-    uint32_t p1 = parameter_[1] >> 8;
-    uint16_t bytepitch = (16384 - pitch_) >> 11 ; // was 12
-  while (size--) {
-    ++phase_;
-    if (phase_ %  bytepitch == 0) ++t_; 
-    // This one is the second one listed at from http://xifeng.weebly.com/bytebeats.html
-    int32_t sample = ((( (((((t_ >> p0) | t_) | (t_ >> p0)) * 10) & ((5 * t_) | (t_ >> 10)) ) | (t_ ^ (t_ % p1)) ) & 0xFF)) << 8 ;
-    *buffer++ = sample;
-  }
-}
-
 /* static */
 DigitalOscillator::RenderFn DigitalOscillator::fn_table_[] = {
-  &DigitalOscillator::RenderTripleRingMod,
   &DigitalOscillator::RenderSawSwarm,
   &DigitalOscillator::RenderComb,
-  &DigitalOscillator::RenderToy,
-  &DigitalOscillator::RenderDigitalFilter,
-  &DigitalOscillator::RenderDigitalFilter,
-  &DigitalOscillator::RenderDigitalFilter,
-  &DigitalOscillator::RenderDigitalFilter,
   &DigitalOscillator::RenderVosim,
   &DigitalOscillator::RenderVowel,
   &DigitalOscillator::RenderVowelFof,
@@ -2404,23 +1850,12 @@ DigitalOscillator::RenderFn DigitalOscillator::fn_table_[] = {
   &DigitalOscillator::RenderBlown,
   &DigitalOscillator::RenderFluted,
   &DigitalOscillator::RenderStruckBell,
-  &DigitalOscillator::RenderStruckDrum,
-  &DigitalOscillator::RenderKick,
-  &DigitalOscillator::RenderCymbal,
-  &DigitalOscillator::RenderSnare,
   &DigitalOscillator::RenderWavetables,
   &DigitalOscillator::RenderWaveMap,
   &DigitalOscillator::RenderWaveLine,
   &DigitalOscillator::RenderWaveParaphonic,
-  // &DigitalOscillator::RenderFilteredNoise,
-  // &DigitalOscillator::RenderTwinPeaksNoise,
   &DigitalOscillator::RenderClockedNoise,
   &DigitalOscillator::RenderGranularCloud,
-  // &DigitalOscillator::RenderParticleNoise,
-  &DigitalOscillator::RenderBytebeat0,
-  &DigitalOscillator::RenderBytebeat1,
-  &DigitalOscillator::RenderBytebeat2,
-  &DigitalOscillator::RenderBytebeat3,
   &DigitalOscillator::RenderSilence,
 };
 

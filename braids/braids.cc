@@ -43,6 +43,7 @@
 #include "braids/drivers/system.h"
 #include "braids/envelope.h"
 #include "braids/macro_oscillator.h"
+#include "braids/output_filter.h"
 #include "braids/vco_jitter_source.h"
 #include "braids/ui.h"
 
@@ -54,6 +55,7 @@ const size_t kNumBlocks = 4;
 const size_t kBlockSize = 24;
 
 MacroOscillator osc;
+OutputFilter output_filter;
 Envelope envelope;  // first envelope/LFO 
 Envelope envelope2; // second envelope/LFO 
 Adc adc;
@@ -155,6 +157,7 @@ void Init() {
   // debug_pin.Init();
   dac.Init();
   osc.Init();
+  output_filter.Init();
   internal_adc.Init();
   
   for (size_t i = 0; i < kNumBlocks; ++i) {
@@ -808,7 +811,8 @@ void RenderBlock() {
     pitch = 0;
   }
   
-  osc.set_pitch(pitch + settings.pitch_transposition());
+  int32_t osc_pitch = pitch + settings.pitch_transposition();
+  osc.set_pitch(osc_pitch);
 
   if (trigger_flag) {
     if (!(!settings.osc_sync() && settings.shape() == MACRO_OSC_SHAPE_WAVE_PARAPHONIC)) {
@@ -887,7 +891,33 @@ void RenderBlock() {
      sample_rate_value = ParamClip(sample_rate_value, static_cast<uint8_t>(0), static_cast<uint8_t>(6));
   }
      
-  // Copy to DAC buffer with sample rate and bit reduction applied.
+  // Output filter (TPT SVF). Cutoff is summed in the pitch domain:
+  // FCUT + keyboard tracking + MOD1/MOD2 depth + FM CV (FMCV = FLTR).
+  OutputFilterMode filter_mode = static_cast<OutputFilterMode>(
+      settings.GetValue(SETTING_FILTER_MODE));
+  if (filter_mode != OUTPUT_FILTER_OFF || output_filter.active()) {
+    int32_t cutoff = (12 + settings.GetValue(SETTING_FILTER_CUTOFF)) << 7;
+    int32_t tracking = settings.GetValue(SETTING_FILTER_TRACKING);
+    cutoff += ((osc_pitch - (60 << 7)) * tracking) >> 1;
+    // Depth 0..62 (31 = none). Full depth = about +/-124 semitones.
+    int32_t env1_depth = int32_t(settings.GetValue(SETTING_FILTER_ENV1)) - 31;
+    int32_t env2_depth = int32_t(settings.GetValue(SETTING_FILTER_ENV2)) - 31;
+    if (modulator1_mode && env1_depth) {
+      cutoff += (env1_depth * int32_t(ad_value)) >> 7;
+    }
+    if (modulator2_mode && env2_depth) {
+      cutoff += (env2_depth * int32_t(ad2_value)) >> 7;
+    }
+    if (meta_mod == 18) {
+      cutoff += settings.adc_to_fm(adc.channel(3));
+    }
+    int32_t resonance = int32_t(settings.GetValue(SETTING_FILTER_RESONANCE)) << 8;
+    output_filter.Configure(filter_mode, cutoff, resonance);
+  }
+  bool filter_active = output_filter.active();
+
+  // Copy to DAC buffer with sample rate and bit reduction applied,
+  // then the output filter (smooths the bit-crush/decimation staircase).
   int16_t sample = 0;
   size_t decimation_factor = decimation_factors[sample_rate_value];  
   uint16_t bit_mask = bit_reduction_masks[bits_value];
@@ -895,7 +925,8 @@ void RenderBlock() {
     if ((i % decimation_factor) == 0) {
        sample = render_buffer[i] & bit_mask;
     }
-    render_buffer[i] = static_cast<int32_t>(sample) * gain >> 16;
+    int16_t filtered = filter_active ? output_filter.Process(sample) : sample;
+    render_buffer[i] = static_cast<int32_t>(filtered) * gain >> 16;
   }
   render_block = (render_block + 1) % kNumBlocks;
   // debug_pin.Low();

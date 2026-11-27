@@ -53,52 +53,29 @@ static const size_t kNumFormants = 5;
 static const size_t kNumPluckVoices = 3;
 static const size_t kNumOverlappingFof = 3;
 static const size_t kNumBellPartials = 11;
-static const size_t kNumDrumPartials = 6;
 
 enum DigitalOscillatorShape {
-  OSC_SHAPE_TRIPLE_RING_MOD,
+  // Order must match fn_table_ in digital_oscillator.cc and the digital
+  // block of MacroOscillatorShape (offset from MACRO_OSC_SHAPE_SAW_SWARM).
   OSC_SHAPE_SAW_SWARM,
   OSC_SHAPE_COMB_FILTER,
-  OSC_SHAPE_TOY,
-
-  OSC_SHAPE_DIGITAL_FILTER_LP,
-  OSC_SHAPE_DIGITAL_FILTER_PK,
-  OSC_SHAPE_DIGITAL_FILTER_BP,
-  OSC_SHAPE_DIGITAL_FILTER_HP,
   OSC_SHAPE_VOSIM,
   OSC_SHAPE_VOWEL,
   OSC_SHAPE_VOWEL_FOF,
-
   OSC_SHAPE_FM,
   OSC_SHAPE_FEEDBACK_FM,
   OSC_SHAPE_CHAOTIC_FEEDBACK_FM,
-
-  OSC_SHAPE_STRUCK_BELL,
-  OSC_SHAPE_STRUCK_DRUM,
-
-  OSC_SHAPE_KICK,
-  OSC_SHAPE_HAT,
-  OSC_SHAPE_SNARE,
-  
   OSC_SHAPE_PLUCKED,
   OSC_SHAPE_BOWED,
   OSC_SHAPE_BLOWN,
   OSC_SHAPE_FLUTED,
-  
+  OSC_SHAPE_STRUCK_BELL,
   OSC_SHAPE_WAVETABLES,
   OSC_SHAPE_WAVE_MAP,
   OSC_SHAPE_WAVE_LINE,
   OSC_SHAPE_WAVE_PARAPHONIC,
-  
-  // OSC_SHAPE_FILTERED_NOISE,
-  // OSC_SHAPE_TWIN_PEAKS_NOISE,
   OSC_SHAPE_CLOCKED_NOISE,
   OSC_SHAPE_GRANULAR_CLOUD,
-  // OSC_SHAPE_PARTICLE_NOISE,
-  OSC_SHAPE_BYTEBEAT0,
-  OSC_SHAPE_BYTEBEAT1,
-  OSC_SHAPE_BYTEBEAT2,
-  OSC_SHAPE_BYTEBEAT3,
   OSC_SHAPE_SILENCE,
 
   // Leave this here because it marks the end of the oscillator model list.
@@ -252,7 +229,6 @@ class DigitalOscillator {
     svf_[1].Init();
     svf_[2].Init();
     phase_ = 0;
-    // t_ = 0; // Don't reset the bytebeat counter to allow continuity when switch models
     strike_ = true;
     init_ = true;
   }
@@ -288,12 +264,9 @@ class DigitalOscillator {
   void Render(const uint8_t* sync, int16_t* buffer, uint8_t size);
   
  private:
-  void RenderTripleRingMod(const uint8_t*, int16_t*, uint8_t);
   void RenderSawSwarm(const uint8_t*, int16_t*, uint8_t);
   void RenderComb(const uint8_t*, int16_t*, uint8_t);
-  void RenderToy(const uint8_t*, int16_t*, uint8_t);
 
-  void RenderDigitalFilter(const uint8_t*, int16_t*, uint8_t);
   void RenderVosim(const uint8_t*, int16_t*, uint8_t);
   void RenderVowel(const uint8_t*, int16_t*, uint8_t);
   void RenderVowelFof(const uint8_t*, int16_t*, uint8_t);
@@ -303,7 +276,6 @@ class DigitalOscillator {
   void RenderChaoticFeedbackFm(const uint8_t*, int16_t*, uint8_t);
 
   void RenderStruckBell(const uint8_t*, int16_t*, uint8_t);
-  void RenderStruckDrum(const uint8_t*, int16_t*, uint8_t);
   void RenderPlucked(const uint8_t*, int16_t*, uint8_t);
   void RenderBowed(const uint8_t*, int16_t*, uint8_t);
   void RenderBlown(const uint8_t*, int16_t*, uint8_t);
@@ -320,15 +292,8 @@ class DigitalOscillator {
   void RenderGranularCloud(const uint8_t*, int16_t*, uint8_t);
   // void RenderParticleNoise(const uint8_t*, int16_t*, uint8_t);
   
-  void RenderKick(const uint8_t*, int16_t*, uint8_t);
-  void RenderSnare(const uint8_t*, int16_t*, uint8_t);
-  void RenderCymbal(const uint8_t*, int16_t*, uint8_t);
   void RenderQuestionMark(const uint8_t*, int16_t*, uint8_t);
  
-  void RenderBytebeat0(const uint8_t*, int16_t*, uint8_t);
-  void RenderBytebeat1(const uint8_t*, int16_t*, uint8_t);
-  void RenderBytebeat2(const uint8_t*, int16_t*, uint8_t);
-  void RenderBytebeat3(const uint8_t*, int16_t*, uint8_t);
   void RenderSilence(const uint8_t*, int16_t*, uint8_t);
   
   uint32_t ComputePhaseIncrement(int16_t midi_pitch);
@@ -342,7 +307,6 @@ class DigitalOscillator {
   uint32_t phase_;
   uint32_t phase_increment_;
   uint32_t delay_;
-  uint32_t t_; // for bytebeat
 
   int16_t parameter_[2];
   int16_t previous_parameter_[2];

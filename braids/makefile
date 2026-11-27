@@ -44,6 +44,10 @@ RESOURCES      = braids/resources
 
 include stmlib/makefile.inc
 
+# Custom linker script: protects the settings pages and places .ARM.exidx
+# (needed with recent arm-none-eabi toolchains). See the file for details.
+LINKER_SCRIPT = braids/stm32f10x_flash_md_hypnoise.ld
+
 # Rule for building the firmware update file
 wav:  $(TARGET_BIN)
 	python stm_audio_bootloader/qpsk/encoder.py \
