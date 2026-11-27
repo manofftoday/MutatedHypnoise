@@ -54,6 +54,16 @@ const size_t kNumBlocks = 4;
 const size_t kBlockSize = 24;
 
 MacroOscillator osc;
+
+// CPU meter: the Cortex-M3 cycle counter (DWT_CYCCNT), enabled at Init().
+// A block of 24 samples must be rendered in 24 sample periods
+// (24 * 750 = 18000 cycles at 72 MHz / 96 kHz) to avoid dropouts.
+volatile uint32_t* const kDemcr = reinterpret_cast<uint32_t*>(0xE000EDFC);
+volatile uint32_t* const kDwtControl = reinterpret_cast<uint32_t*>(0xE0001000);
+volatile uint32_t* const kDwtCycleCount =
+    reinterpret_cast<uint32_t*>(0xE0001004);
+const uint32_t kBlockBudgetCycles = F_CPU / 96000 * 24;
+uint32_t oscillator_cycles;  // osc.Render() alone, last block
 OutputFilter output_filter;
 Adc adc;
 Dac dac;
@@ -171,6 +181,9 @@ void Init() {
   sh_pitch = 69 << 7;
      
   jitter_source.Init(GetUniqueId(1));
+  *kDemcr |= 1UL << 24;       // TRCENA
+  *kDwtCycleCount = 0;
+  *kDwtControl |= 1;          // CYCCNTENA
   sys.StartTimers();
 }
 
@@ -426,7 +439,9 @@ void RenderBlock() {
     memset(sync_buffer, 0, kBlockSize);
   }
 
+  uint32_t oscillator_start = *kDwtCycleCount;
   osc.Render(sync_buffer, render_buffer, kBlockSize);
+  oscillator_cycles = *kDwtCycleCount - oscillator_start;
 
   // Output stage (sound design): ring modulator -> sub oscillator ->
   // asymmetric drive -> sine wavefolder. Each one is bypassed at 0.
@@ -584,7 +599,14 @@ int main(void) {
   Init();
   while (1) {
     while (render_block != playback_block) {
+      uint32_t start = *kDwtCycleCount;
       RenderBlock();
+      // Wall-clock time of the block, interrupts included.
+      uint32_t elapsed = *kDwtCycleCount - start;
+      uint32_t load = elapsed * 100 / kBlockBudgetCycles;
+      uint32_t oscillator_load = oscillator_cycles * 100 / kBlockBudgetCycles;
+      ui.UpdateCpuLoad(load > 255 ? 255 : load,
+                       oscillator_load > 255 ? 255 : oscillator_load);
     }
     ui.DoEvents();
   }

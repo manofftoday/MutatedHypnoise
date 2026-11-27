@@ -6,7 +6,7 @@
  *    0x0801F000, where the 4 x 1K settings pages start (see settings.cc,
  *    Storage<0x8020000, 4>). The linker now fails instead of silently
  *    overlapping the settings.
- *  - Stack at the top of RAM with at least 4 KB (see .bss below).
+ *  - Stack at the top of RAM with at least 1.5 KB (see .bss below).
  *  - .ARM.exidx placed in FLASH: recent arm-none-eabi newlib builds
  *    (e.g. memcpy in GCC 14) emit it, and the original script had no
  *    room for it (".ARM.exidx overlaps section .data").
@@ -63,6 +63,6 @@ SECTIONS
    * script reserved only 512 bytes at the *bottom* of RAM, so an overflow
    * ran below 0x20000000 (HardFault) once .data became tiny (MAYA). */
   _estack = ORIGIN(RAM) + LENGTH(RAM);
-  _sstack = _estack - 4096;
-  ASSERT(_ebss <= _sstack, "Less than 4 KB of RAM left for the stack")
+  _sstack = _estack - 1536;  /* ~3x the measured worst case (~520 B) */
+  ASSERT(_ebss <= _sstack, "Less than 1.5 KB of RAM left for the stack")
 }

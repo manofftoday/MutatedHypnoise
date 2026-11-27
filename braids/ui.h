@@ -123,6 +123,20 @@ class Ui {
     }
   }
 
+  // CPU load of the last block, in % of the real-time budget: whole
+  // block (interrupts included) and the sound engine alone. The menu page
+  // LOAD cycles through average, peak and engine peak over ~0.5 s.
+  inline void UpdateCpuLoad(uint8_t percent, uint8_t oscillator_percent) {
+    if (percent > cpu_peak_) {
+      cpu_peak_ = percent;
+    }
+    if (oscillator_percent > cpu_oscillator_peak_) {
+      cpu_oscillator_peak_ = oscillator_percent;
+    }
+    cpu_sum_ += percent;
+    ++cpu_count_;
+  }
+
   // Overrides oscillator shape display when in meta mode.
   inline void set_meta_shape(MacroOscillatorShape shape) {
     meta_shape_ = shape;
@@ -165,6 +179,13 @@ class Ui {
 
   uint8_t feedback_[FEEDBACK_LAST];  // 0..127
   uint16_t level_peak_;
+  uint8_t cpu_peak_;
+  uint8_t cpu_oscillator_peak_;
+  uint32_t cpu_sum_;
+  uint16_t cpu_count_;
+  uint8_t cpu_display_[3];  // average, peak, engine peak
+  uint32_t cpu_time_;
+  uint32_t increment_time_;  // encoder acceleration
 
   int16_t fine_;                   // FINE knob, 0..4095
   // TIMBRE, COLOR, FM, FINE positions at the last detected move.

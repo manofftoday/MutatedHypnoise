@@ -81,6 +81,7 @@ enum DigitalOscillatorShape {
   OSC_SHAPE_DRIFT_SWARM,
   OSC_SHAPE_FOLD_DRONE,
   OSC_SHAPE_SPECTRAL_DRONE,
+  OSC_SHAPE_TANPURA,
   OSC_SHAPE_SILENCE,
 
   // Leave this here because it marks the end of the oscillator model list.
@@ -234,6 +235,16 @@ struct SpectralDroneState {
   uint32_t shimmer_phase;
 };
 
+struct TanpuraState {
+  uint32_t phase[4];
+  int32_t envelope[4];      // Q23
+  int32_t drift[4];         // organic detune random walks, Q8
+  int16_t drift_target[4];
+  uint32_t cycle_phase;
+  uint8_t attack[4];
+  uint8_t next_string;
+};
+
 struct HatState {
   uint32_t phase[6];
   uint32_t rng_state;
@@ -260,7 +271,8 @@ union DigitalOscillatorState {
   DriftSwarmState dsw;
   FoldDroneState fdr;
   SpectralDroneState spc;
-  uint32_t modulator_phase;
+  TanpuraState tnp;
+uint32_t modulator_phase;
 };
 
 class DigitalOscillator {
@@ -358,6 +370,7 @@ class DigitalOscillator {
   void RenderDriftSwarm(const uint8_t*, int16_t*, uint8_t);
   void RenderFoldDrone(const uint8_t*, int16_t*, uint8_t);
   void RenderSpectralDrone(const uint8_t*, int16_t*, uint8_t);
+  void RenderTanpura(const uint8_t*, int16_t*, uint8_t);
 
   void RenderQuestionMark(const uint8_t*, int16_t*, uint8_t);
  

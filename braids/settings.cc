@@ -132,6 +132,14 @@ void Settings::Save() {
   storage.ParsimoniousSave(data_, &version_token_);
 }
 
+uint8_t Settings::default_value(Setting setting) const {
+  if (setting >= SETTING_ENGINE_PARAM_1 && setting <= SETTING_ENGINE_PARAM_3) {
+    return kEngineParamDefaults[data_.shape][setting - SETTING_ENGINE_PARAM_1];
+  }
+  const uint8_t* defaults = reinterpret_cast<const uint8_t*>(&kInitSettings);
+  return defaults[setting];
+}
+
 const char* Settings::setting_name(Setting setting) const {
   if (setting >= SETTING_ENGINE_PARAM_1 && setting <= SETTING_ENGINE_PARAM_3) {
     return kEngineParamNames[data_.shape][setting - SETTING_ENGINE_PARAM_1];
@@ -176,6 +184,7 @@ const char* const algo_values[] = {
     "DSWM", // drift swarm
     "FDRN", // fold drone
     "SPEC", // spectral (additive) drone
+    "TANP", // tanpura
     "ZERO", // RenderSilence
 };
 
@@ -529,7 +538,8 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 127, "PAR3", mod_rate_values },
   { 0, 0, "CAL.", NULL },
   { 0, 0, "    ", NULL },  // Placeholder for CV tester
-  { 0, 0, "h0.3", NULL },  // Placeholder for version string
+  { 0, 0, "LOAD", NULL },  // CPU load meter
+{ 0, 0, "h0.4", NULL },  // Placeholder for version string
 };
 
 // Menu order: engine, its three advanced parameters, the output stage
@@ -571,6 +581,7 @@ const Setting Settings::settings_order_[] = {
   SETTING_RESET_TYPE,
   SETTING_CALIBRATION,
   SETTING_CV_TESTER,
+  SETTING_CPU_LOAD,
   SETTING_VERSION,
 };
 

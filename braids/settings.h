@@ -79,10 +79,11 @@ enum MacroOscillatorShape {
   MACRO_OSC_SHAPE_DRIFT_SWARM,
   MACRO_OSC_SHAPE_FOLD_DRONE,
   MACRO_OSC_SHAPE_SPECTRAL_DRONE,
+  MACRO_OSC_SHAPE_TANPURA,
   MACRO_OSC_SHAPE_SILENCE,
 
   MACRO_OSC_SHAPE_LAST,
-  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_SPECTRAL_DRONE
+  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_TANPURA
 };
 
 enum Resolution {
@@ -228,6 +229,7 @@ enum Setting {
   // Not settings per se, but used for menu display!
   SETTING_CALIBRATION,
   SETTING_CV_TESTER,
+  SETTING_CPU_LOAD,
   SETTING_VERSION,
   SETTING_LAST,
 };
@@ -331,6 +333,13 @@ class Settings {
   // Name shown in the menu: the advanced parameters are named after what
   // they do in the current engine.
   const char* setting_name(Setting setting) const;
+
+  // Default value of an editable setting (per engine for the advanced
+  // parameters), and a reset of one setting to it.
+  uint8_t default_value(Setting setting) const;
+  void ResetValue(Setting setting) {
+    SetValue(setting, default_value(setting));
+  }
 
   inline const uint8_t* engine_params(MacroOscillatorShape shape) const {
     return data_.engine_params[shape];

@@ -510,6 +510,7 @@ MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
   &MacroOscillator::RenderDigital,  // DSWM
   &MacroOscillator::RenderDigital,  // FDRN
   &MacroOscillator::RenderDigital,  // SPEC
+  &MacroOscillator::RenderDigital,  // TANP
   &MacroOscillator::RenderDigital,  // ZERO
 };
 

@@ -245,10 +245,11 @@ static const MacroOscillatorShape kNewEngines[] = {
   MACRO_OSC_SHAPE_DRIFT_SWARM,
   MACRO_OSC_SHAPE_FOLD_DRONE,
   MACRO_OSC_SHAPE_SPECTRAL_DRONE,
+  MACRO_OSC_SHAPE_TANPURA,
 };
 static const char* const kNewEngineNames[] = {
-  "VMRF", "VOS2", "DSWM", "FDRN", "SPEC" };
-static const size_t kNumNewEngines = 5;
+  "VMRF", "VOS2", "DSWM", "FDRN", "SPEC", "TANP" };
+static const size_t kNumNewEngines = 6;
 
 // Corners of TIMBRE/COLOR at a low and a high pitch, with triggers: no
 // sustained clipping, no large DC offset, audible output.
@@ -355,6 +356,18 @@ static void TestAdvancedParameters() {
                    kEngineParamNames[shape][p], extremes[x], pitch >> 7, rms);
           }
         }
+      }
+      if (!effective) {
+        // Some parameters only act when another one is up (e.g. a rate
+        // when its depth is 0 by default): retry with the others at 64.
+        uint8_t context[3] = { 64, 64, 64 };
+        const int16_t kPitch = 40 << 7;
+        RenderEngine(static_cast<MacroOscillatorShape>(shape), context,
+                     kPitch, reference, kBlocks);
+        context[p] = 127;
+        RenderEngine(static_cast<MacroOscillatorShape>(shape), context,
+                     kPitch, modified, kBlocks);
+        effective = memcmp(reference, modified, sizeof(reference)) != 0;
       }
       ++tested;
       if (!effective) {

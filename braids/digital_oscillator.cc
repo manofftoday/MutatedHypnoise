@@ -2296,6 +2296,115 @@ void DigitalOscillator::RenderSpectralDrone(
   }
 }
 
+// TANP - tanpura (ported from the MAYA branch). Four strings plucked in an
+// endless cycle: first string (TUNE: Pa, Ma, Ni or Sa), Sa, Sa (DTUN:
+// detuned against the other Sa) and the low Sa.
+//   TIMBRE: pluck rate (one string every ~2 s .. ~0.25 s) and organic
+//           detune of the strings.
+//   COLOR:  jawari, the bridge buzz: a wavefolder whose depth follows the
+//           decay of each string (bright attack, mellowing tail).
+//   TRIG:   plucks the next string at once. DCAY: string decay time.
+static const int16_t kTanpuraFirstString[4] = { -640, -896, -128, 0 };
+
+// Sawtooth with a polyBLEP correction around the reset.
+static inline int32_t BlepSaw(uint32_t phase, uint32_t increment) {
+  int32_t saw = static_cast<int32_t>(phase >> 16) - 32768;
+  uint32_t scale = increment >> 16;
+  if (scale == 0) {
+    return saw;
+  }
+  if (phase < increment) {
+    int32_t x = phase / scale;
+    saw -= ((x << 1) - (x * (x >> 1) >> 15) - 65536) >> 1;
+  } else if (phase > ~increment) {
+    int32_t x = (~phase) / scale;
+    saw -= ((x * (x >> 1) >> 15) - (x << 1) + 65536) >> 1;
+  }
+  return saw;
+}
+
+void DigitalOscillator::RenderTanpura(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  TanpuraState& t = state_.tnp;
+  if (init_) {
+    // Start with the four strings sounding.
+    for (uint8_t k = 0; k < 4; ++k) {
+      t.attack[k] = 1;
+      t.phase[k] = Random::GetWord();
+    }
+    init_ = false;
+    strike_ = false;
+  }
+  int32_t rate = parameter_[0];
+  int32_t jawari = parameter_[1];
+
+  uint32_t cycle_increment = 536870 + rate * 118;
+  t.cycle_phase += cycle_increment;
+  if (t.cycle_phase < cycle_increment || strike_) {
+    if (strike_) {
+      t.cycle_phase = 0;
+      strike_ = false;
+    }
+    t.attack[t.next_string] = 1;
+    t.next_string = (t.next_string + 1) & 3;
+  }
+
+  int32_t offset[4] = {
+    kTanpuraFirstString[extra_[0] >> 5], 0, extra_[2] >> 2, -1536
+  };
+  int32_t decay = 1 + ((127 - extra_[1]) * 12 >> 7);
+  uint32_t increment[4];
+  int32_t level[4];
+  int32_t fold_gain[4];
+  int32_t total = 0;
+  for (uint8_t k = 0; k < 4; ++k) {
+    int32_t* envelope = &t.envelope[k];
+    if (t.attack[k]) {
+      *envelope += ((32767 << 8) - *envelope) >> 2;
+      if (*envelope > (30000 << 8)) {
+        t.attack[k] = 0;
+      }
+    } else {
+      *envelope -= (*envelope >> 16) * decay;
+    }
+    int32_t envelope_level = *envelope >> 8;
+    // Organic detune: slow random walk, up to ~12 cents with TIMBRE.
+    if ((Random::GetWord() >> 16) <= 64) {
+      t.drift_target[k] = Random::GetSample();
+    }
+    t.drift[k] += ((static_cast<int32_t>(t.drift_target[k]) << 8) -
+                   t.drift[k]) >> 11;
+    int32_t detune = (t.drift[k] >> 8) * (rate >> 11) >> 15;
+    int32_t pitch = pitch_ + offset[k] + detune;
+    if (pitch < 0) pitch = 0;
+    increment[k] = ComputePhaseIncrement(pitch);
+    level[k] = envelope_level * 24576 >> 15;
+    total += level[k];
+    // Jawari: fold depth 1x .. 8x, following the envelope.
+    fold_gain[k] = 4096 + ((jawari * envelope_level >> 15) * 7 >> 3);
+  }
+  total >>= 1;
+  int32_t gain = total > 26000 ? (26000 << 15) / total : 32768;
+
+  while (size--) {
+    int32_t sum = 0;
+    for (uint8_t k = 0; k < 4; ++k) {
+      t.phase[k] += increment[k];
+      int32_t x = BlepSaw(t.phase[k], increment[k]);
+      CLIP(x)
+      uint32_t fold_phase = static_cast<uint32_t>(x * fold_gain[k]) << 3;
+      int32_t y = Interpolate824(wav_sine, fold_phase + kSinePhaseOffset);
+      sum += y * level[k] >> 16;  // >> 1: four strings
+    }
+    sum = sum * gain >> 15;
+    CLIP(sum)
+    *buffer++ = Interpolate88(ws_moderate_overdrive, sum + 32768);
+  }
+  (void)sync;
+}
+
 void DigitalOscillator::RenderSilence(
     const uint8_t* sync,
     int16_t* buffer,
@@ -2331,6 +2440,7 @@ DigitalOscillator::RenderFn DigitalOscillator::fn_table_[] = {
   &DigitalOscillator::RenderDriftSwarm,
   &DigitalOscillator::RenderFoldDrone,
   &DigitalOscillator::RenderSpectralDrone,
+  &DigitalOscillator::RenderTanpura,
   &DigitalOscillator::RenderSilence,
 };
 

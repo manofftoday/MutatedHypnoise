@@ -65,6 +65,7 @@ const char kEngineParamNames[MACRO_OSC_SHAPE_LAST][kNumEngineParams][5] = {
   { "RATE", "WAVE", "VOIC" },  // DRIFT_SWARM
   { "RATE", "DPTH", "BRST" },  // FOLD_DRONE
   { "SHIM", "SRAT", "WIDT" },  // SPECTRAL_DRONE
+  { "TUNE", "DCAY", "DTUN" },  // TANPURA
   { "----", "----", "----" },  // SILENCE
 };
 
@@ -101,8 +102,9 @@ const uint8_t kEngineParamDefaults[MACRO_OSC_SHAPE_LAST][kNumEngineParams] = {
   { 32, 64, 0 },     // VOWEL_MORPH
   { 0, 127, 64 },    // VOSIM_PLUS
   { 64, 0, 127 },    // DRIFT_SWARM
-  { 64, 64, 64 },    // FOLD_DRONE
-  { 64, 64, 64 },    // SPECTRAL_DRONE
+  { 64, 0, 64 },     // FOLD_DRONE: no breathing LFO by default
+  { 0, 64, 64 },     // SPECTRAL_DRONE: no shimmer by default
+  { 0, 64, 16 },     // TANPURA: Pa, ~2.7 s decay, Sa detune
   { 0, 0, 0 },       // SILENCE
 };
 

@@ -294,6 +294,9 @@ void Ui::RefreshDisplay() {
              text[i] = static_cast<char>(
                  kGlyphNeedle + ((splash_frame_ + i * 2) & 7));
            }
+         } else if (splash_frame_ >= kSplashFrames - 3) {
+           memcpy(text, settings.metadata(SETTING_VERSION).name,
+                  kDisplayWidth);
          }
          display_.Print(text);
        }
@@ -332,7 +335,25 @@ void Ui::RefreshDisplay() {
     
     case MODE_MENU:
       {
-        if (setting_ == SETTING_CV_TESTER) {
+        if (setting_ == SETTING_CPU_LOAD) {
+          // Cycles every 1.5 s: A = average, P = peak, O = engine peak,
+          // in % of the real-time budget, e.g. "A" + glyph + "52".
+          // "OV" = over 99 % (the block took longer than real time).
+          static const char kLetters[] = { 'A', 'P', 'O' };
+          uint8_t page = (system_clock.milliseconds() / 1500) % 3;
+          uint8_t load = cpu_display_[page];
+          char text[kDisplayWidth + 1] = "    ";
+          text[0] = kLetters[page];
+          text[1] = MeterGlyph(load > 99 ? 127 : load * 127 / 99);
+          if (load > 99) {
+            text[2] = 'O';
+            text[3] = 'V';
+          } else {
+            text[2] = '0' + load / 10;
+            text[3] = '0' + load % 10;
+          }
+          display_.Print(text);
+        } else if (setting_ == SETTING_CV_TESTER) {
           char text[] = "    ";
           if (!blink_) {
             for (uint8_t i = 0; i < kDisplayWidth; ++i) {
@@ -397,6 +418,9 @@ void Ui::OnLongClick() {
          setting_ = last_setting_;
          setting_index_ = last_setting_index_;
          mode_ = MODE_MENU;
+      } else {
+         // Long press while editing a value: back to its default.
+         settings.ResetValue(setting_);
       }
       break;
     
@@ -450,10 +474,18 @@ void Ui::OnIncrement(const Event& e) {
     case MODE_EDIT:
       {
         int16_t value = settings.GetValue(setting_);
+        int32_t step = e.data;
+        uint32_t now = system_clock.milliseconds();
+        const SettingMetadata& metadata = settings.metadata(setting_);
+        if (metadata.max_value - metadata.min_value >= 100 &&
+            now - increment_time_ < 40) {
+          step *= 4;  // fast turn: bigger steps
+        }
+        increment_time_ = now;
         if (settings.edit_wrap()) {
-           value = settings.metadata(setting_).Wrap(value + e.data);
+           value = settings.metadata(setting_).Wrap(value + step);
         } else {
-           value = settings.metadata(setting_).Clip(value + e.data);
+           value = settings.metadata(setting_).Clip(value + step);
         }
         settings.SetValue(setting_, value);
         display_.set_brightness(settings.GetValue(SETTING_BRIGHTNESS) + 1);
@@ -509,8 +541,18 @@ void Ui::DoEvents() {
      refresh_display_ = true;
   }
   if (queue_.idle_time() >= 50 &&
-      (setting_ == SETTING_CV_TESTER)) {
+      (setting_ == SETTING_CV_TESTER || setting_ == SETTING_CPU_LOAD)) {
     refresh_display_ = true;
+  }
+  if (now - cpu_time_ >= 500) {
+    cpu_time_ = now;
+    cpu_display_[0] = cpu_count_ ? cpu_sum_ / cpu_count_ : 0;
+    cpu_display_[1] = cpu_peak_;
+    cpu_display_[2] = cpu_oscillator_peak_;
+    cpu_peak_ = 0;
+    cpu_oscillator_peak_ = 0;
+    cpu_sum_ = 0;
+    cpu_count_ = 0;
   }
   if (queue_.idle_time() >= 50 &&
       setting_ == SETTING_OSCILLATOR_SHAPE &&
