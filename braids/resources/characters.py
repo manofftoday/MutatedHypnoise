@@ -187,6 +187,11 @@ characters = {
   '\x9E': 'dmnlecpkhgjfb',
   '\x9F': 'abcdefghjklmnp',
 
+  # Horizontal bar: 1, 2 or 3 vertical columns lit (left to right)
+  '\xA0': 'fe',
+  '\xA1': 'fehm',
+  '\xA2': 'fehmbc',
+
   # Spinner 2
   # '\x98': 'ab',
   # '\x99': 'abc',
@@ -204,7 +209,7 @@ characters = {
 
 character_table = []
 # for i in xrange(256):
-for i in xrange(33,160):
+for i in xrange(33,163):
   segments = characters.get(chr(i), '')
   character_table.append(sum(MASKS[segment] for segment in segments))
   

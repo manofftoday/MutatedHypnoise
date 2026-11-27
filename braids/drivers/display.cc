@@ -71,7 +71,7 @@ void Display::Refresh() {
     GPIOB->BRR = kCharacterEnablePins[active_position_];
     active_position_ = (active_position_ + 1) % kDisplayWidth;
     char_index_ = static_cast<uint8_t>(buffer_[active_position_]);
-    if (char_index_ < 33 || char_index_ > 159) {
+    if (char_index_ < 33 || char_index_ > 162) {
        Shift14SegmentsWord(0);
     } else {
        Shift14SegmentsWord(chr_characters[char_index_ - 33]);

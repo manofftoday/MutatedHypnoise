@@ -563,11 +563,16 @@ void RenderBlock() {
 
   // Display feedback (popups, scope and dials).
   int32_t cutoff_display = (cutoff >> 7) - 12;
+  uint8_t feedback[Ui::FEEDBACK_LAST] = {
+    uint8_t(parameter_1 >> 8),
+    uint8_t(parameter_2 >> 8),
+    uint8_t(ParamClip(cutoff_display, int32_t(0), int32_t(127))),
+    uint8_t(ParamClip(resonance >> 8, int32_t(0), int32_t(127))),
+    extras[0], extras[1], extras[2],
+    uint8_t(fold), uint8_t(drive), uint8_t(ring), uint8_t(sub)
+  };
   ui.UpdateFeedback(
-      parameter_1,
-      parameter_2,
-      ParamClip(cutoff_display, int32_t(0), int32_t(127)),
-      ParamClip(resonance >> 8, int32_t(0), int32_t(127)),
+      feedback,
       peak,
       (ParamClip(fine, int32_t(-32768), int32_t(32767)) + 32768) >> 4);
   render_block = (render_block + 1) % kNumBlocks;

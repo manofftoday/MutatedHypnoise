@@ -35,6 +35,8 @@
 
 #include "stmlib/stmlib.h"
 
+#include <cstring>
+
 #include "stmlib/ui/event_queue.h"
 
 #include "braids/drivers/display.h"
@@ -93,22 +95,28 @@ class Ui {
     blink_ = true;
   }
 
+  enum Feedback {
+    FEEDBACK_TIMBRE,
+    FEEDBACK_COLOR,
+    FEEDBACK_CUTOFF,
+    FEEDBACK_RESONANCE,
+    FEEDBACK_PARAM_1,
+    FEEDBACK_PARAM_2,
+    FEEDBACK_PARAM_3,
+    FEEDBACK_FOLD,
+    FEEDBACK_DRIVE,
+    FEEDBACK_RING,
+    FEEDBACK_SUB,
+    FEEDBACK_LAST
+  };
+
   // Live values for the display views and popups, called once per block.
-  //   timbre, color: final engine parameters (0..32767).
-  //   cutoff, resonance: output filter, 0..127.
+  //   values: FEEDBACK_LAST live values (incl. CV), 0..127 each.
   //   level: peak absolute output level of the block (0..32767).
   //   fine: FINE knob position, 0..4095 (same scale as the ADC codes).
-  inline void UpdateFeedback(
-      uint16_t timbre,
-      uint16_t color,
-      uint8_t cutoff,
-      uint8_t resonance,
-      uint16_t level,
-      int16_t fine) {
-    feedback_[FEEDBACK_TIMBRE] = timbre >> 8;
-    feedback_[FEEDBACK_COLOR] = color >> 8;
-    feedback_[FEEDBACK_CUTOFF] = cutoff;
-    feedback_[FEEDBACK_RESONANCE] = resonance;
+  inline void UpdateFeedback(const uint8_t* values, uint16_t level,
+                             int16_t fine) {
+    memcpy(feedback_, values, FEEDBACK_LAST);
     fine_ = fine;
     if (level > level_peak_) {
       level_peak_ = level;
@@ -127,6 +135,7 @@ class Ui {
   void RefreshDisplay();
   void DetectControlMovement(uint32_t now);
   bool RenderMainView(char* text, uint32_t now);
+  void RenderTour(char* text, uint32_t elapsed);
 
   stmlib::EventQueue<16> queue_;
   
@@ -154,19 +163,15 @@ class Ui {
   
   MacroOscillatorShape meta_shape_;
 
-  enum Feedback {
-    FEEDBACK_TIMBRE,
-    FEEDBACK_COLOR,
-    FEEDBACK_CUTOFF,
-    FEEDBACK_RESONANCE,
-    FEEDBACK_LAST
-  };
   uint8_t feedback_[FEEDBACK_LAST];  // 0..127
   uint16_t level_peak_;
 
   int16_t fine_;                   // FINE knob, 0..4095
   // TIMBRE, COLOR, FM, FINE positions at the last detected move.
   int16_t control_reference_[4];
+  // Gesture tracking, to tell a hand on a knob from a CV automation.
+  uint32_t gesture_start_[4];
+  uint32_t last_move_[4];
   int8_t popup_feedback_;          // Feedback index, -1 = no popup
   char popup_letter_;
   uint32_t popup_time_;

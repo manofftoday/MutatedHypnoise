@@ -69,7 +69,7 @@ const SettingsData kInitSettings = {
   0,                      // filter_cutoff_control = MENU
   0,                      // filter_resonance_control = MENU
   0,                      // performance_mode = OFF
-  1,                      // display_view = PARM
+  DISPLAY_VIEW_TOUR,      // display_view
   0,                      // fold = bypass
   0,                      // drive = bypass
   0,                      // ring_amount = off
@@ -461,7 +461,7 @@ const char* const filter_tracking_values[] = { "OFF", "HALF", "FULL" };
 
 const char* const filter_control_values[] = { "MENU", "FM", "TIMB", "COLR" };
 
-const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL" };
+const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL", "TOUR" };
 
 const char* const reset_type_values[] = {
     "NO", // 0

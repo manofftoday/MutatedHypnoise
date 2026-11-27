@@ -196,7 +196,7 @@ extern const uint16_t chr_characters[];
 #define WT_MAP 1
 #define WT_MAP_SIZE 256
 #define CHR_CHARACTERS 0
-#define CHR_CHARACTERS_SIZE 127
+#define CHR_CHARACTERS_SIZE 130
 
 }  // namespace braids
 

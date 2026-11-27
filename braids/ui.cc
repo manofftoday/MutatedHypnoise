@@ -49,9 +49,34 @@ const uint32_t kAnimationPeriod = 50;    // ms between view frames
 const int16_t kControlMoveThreshold = 48;  // ADC codes (of 4096), ~1.2%
 const uint8_t kSplashFrames = 16;
 
+// A gesture is a run of control movements less than kGestureGap apart.
+// One that lasts longer than kMaxGesture is an automation (CV), not a
+// hand: no popups for that control until it rests.
+const uint32_t kGestureGap = 400;
+const uint32_t kMaxGesture = 2500;
+
+// TOUR view (screensaver): after kTourDelay without touching the encoder,
+// cycle through pages: name for kTourNameTime, then a live bar.
+const uint32_t kTourDelay = 4000;
+const uint32_t kTourPageTime = 2600;
+const uint32_t kTourNameTime = 800;
+const uint8_t kTourPageEngine = 0xfe;
+const uint8_t kTourPageScope = 0xfd;
+
 // Font glyphs (resources/characters.py).
 const uint8_t kGlyphNeedle = 0x90;  // 8 needle angles, clockwise from SW
 const uint8_t kGlyphMeter = 0x98;   // 8 fill levels, bottom-up
+const uint8_t kGlyphBar = 0xa0;     // 1..3 columns, left to right
+
+// 0..127 -> 3-character horizontal bar (9 steps) in text[0..2].
+static inline void BarGlyphs(uint8_t value, char* text) {
+  int8_t steps = value * 10 >> 7;  // 0..9
+  for (uint8_t i = 0; i < 3; ++i) {
+    int8_t fill = steps - i * 3;
+    if (fill > 3) fill = 3;
+    text[i] = fill <= 0 ? ' ' : static_cast<char>(kGlyphBar + fill - 1);
+  }
+}
 
 // 0..127 -> blank or one of the 8 fill levels.
 static inline char MeterGlyph(uint8_t value) {
@@ -104,6 +129,13 @@ void Ui::DetectControlMovement(uint32_t now) {
       continue;
     }
     control_reference_[i] = position[i];
+    if (now - last_move_[i] > kGestureGap) {
+      gesture_start_[i] = now;
+    }
+    last_move_[i] = now;
+    if (now - gesture_start_[i] > kMaxGesture) {
+      continue;  // moving for too long: automation, no popup
+    }
     if (cutoff_control == kSource[i] || (performance && i == 3)) {
       popup_feedback_ = FEEDBACK_CUTOFF;
       popup_letter_ = 'F';
@@ -143,6 +175,14 @@ bool Ui::RenderMainView(char* text, uint32_t now) {
     }
     popup_feedback_ = -1;
   }
+  if (view == DISPLAY_VIEW_TOUR) {
+    uint32_t idle = now - encoder_time_;
+    if (idle < kTourDelay) {
+      return false;
+    }
+    RenderTour(text, idle - kTourDelay);
+    return true;
+  }
   if (view == DISPLAY_VIEW_PARAM || now - encoder_time_ < kNameHoldTime) {
     return false;
   }
@@ -155,6 +195,59 @@ bool Ui::RenderMainView(char* text, uint32_t now) {
     text[3] = DialGlyph(feedback_[FEEDBACK_RESONANCE]);
   }
   return true;
+}
+
+// Screensaver: engine, TIMBRE, COLOR, the engine's advanced parameters,
+// the filter (when on), the output stage (what is in use) and the scope.
+void Ui::RenderTour(char* text, uint32_t elapsed) {
+  uint8_t pages[16];
+  uint8_t num_pages = 0;
+  pages[num_pages++] = kTourPageEngine;
+  pages[num_pages++] = FEEDBACK_TIMBRE;
+  pages[num_pages++] = FEEDBACK_COLOR;
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (settings.setting_name(
+            static_cast<Setting>(SETTING_ENGINE_PARAM_1 + i))[0] != '-') {
+      pages[num_pages++] = FEEDBACK_PARAM_1 + i;
+    }
+  }
+  if (settings.GetValue(SETTING_FILTER_MODE)) {
+    pages[num_pages++] = FEEDBACK_CUTOFF;
+    pages[num_pages++] = FEEDBACK_RESONANCE;
+  }
+  for (uint8_t i = FEEDBACK_FOLD; i <= FEEDBACK_SUB; ++i) {
+    if (feedback_[i]) {
+      pages[num_pages++] = i;
+    }
+  }
+  pages[num_pages++] = kTourPageScope;
+
+  uint8_t page = pages[(elapsed / kTourPageTime) % num_pages];
+  bool show_name = (elapsed % kTourPageTime) < kTourNameTime;
+  if (page == kTourPageEngine) {
+    memcpy(text, settings.metadata(SETTING_OSCILLATOR_SHAPE).strings[
+        meta_shape_], kDisplayWidth);
+    return;
+  } else if (page == kTourPageScope) {
+    memcpy(text, scope_, kDisplayWidth);
+    return;
+  }
+  static const char* const kNames[] = {
+    "TIMB", "COLR", "FCUT", "FRES", NULL, NULL, NULL,
+    "FOLD", "DRIV", "RING", "SUB "
+  };
+  const char* name = kNames[page];
+  if (!name) {
+    name = settings.setting_name(static_cast<Setting>(
+        SETTING_ENGINE_PARAM_1 + page - FEEDBACK_PARAM_1));
+  }
+  if (show_name) {
+    memcpy(text, name, kDisplayWidth);
+  } else {
+    // First letter + live bar, e.g. "F" followed by 2 2/3 full blocks.
+    text[0] = page == FEEDBACK_RESONANCE ? 'Q' : name[0];
+    BarGlyphs(feedback_[page], text + 1);
+  }
 }
 
 void Ui::Poll() {
