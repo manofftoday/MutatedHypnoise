@@ -82,27 +82,29 @@ void Ui::Init() {
 }
 
 void Ui::DetectControlMovement(uint32_t now) {
+  // TIMBRE, COLOR, FM and FINE, and the filter source each one may drive.
+  int16_t position[4] = { cv_[0], cv_[1], cv_[3], fine_ };
   if (!controls_initialized_ || mode_ == MODE_SPLASH) {
-    memcpy(control_reference_, cv_, sizeof(control_reference_));
+    memcpy(control_reference_, position, sizeof(control_reference_));
     controls_initialized_ = true;
     return;
   }
-  // TIMBRE, COLOR and FM, and the filter source each one may drive.
-  static const uint8_t kChannel[] = { 0, 1, 3 };
   static const uint8_t kSource[] = {
-    FILTER_CONTROL_TIMBRE, FILTER_CONTROL_COLOR, FILTER_CONTROL_FM
+    FILTER_CONTROL_TIMBRE, FILTER_CONTROL_COLOR, FILTER_CONTROL_FM, 0xff
   };
-  uint8_t cutoff_control = settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
-  uint8_t resonance_control = settings.GetValue(
-      SETTING_FILTER_RESONANCE_CONTROL);
-  for (uint8_t i = 0; i < 3; ++i) {
-    uint8_t channel = kChannel[i];
-    int16_t delta = cv_[channel] - control_reference_[channel];
+  // Performance mode: FINE = cutoff, FM = resonance.
+  bool performance = settings.GetValue(SETTING_PERFORMANCE_MODE);
+  uint8_t cutoff_control = performance ? 0xff :
+      settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
+  uint8_t resonance_control = performance ? FILTER_CONTROL_FM :
+      settings.GetValue(SETTING_FILTER_RESONANCE_CONTROL);
+  for (uint8_t i = 0; i < 4; ++i) {
+    int16_t delta = position[i] - control_reference_[i];
     if (delta < kControlMoveThreshold && delta > -kControlMoveThreshold) {
       continue;
     }
-    control_reference_[channel] = cv_[channel];
-    if (cutoff_control == kSource[i]) {
+    control_reference_[i] = position[i];
+    if (cutoff_control == kSource[i] || (performance && i == 3)) {
       popup_feedback_ = FEEDBACK_CUTOFF;
       popup_letter_ = 'F';
     } else if (resonance_control == kSource[i]) {
@@ -115,7 +117,7 @@ void Ui::DetectControlMovement(uint32_t now) {
       popup_feedback_ = FEEDBACK_COLOR;
       popup_letter_ = 'C';
     } else {
-      continue;  // FM CV not routed to the filter: no popup.
+      continue;  // FM / FINE not routed to the filter: no popup.
     }
     popup_time_ = now;
   }
@@ -149,8 +151,8 @@ bool Ui::RenderMainView(char* text, uint32_t now) {
   } else {
     text[0] = DialGlyph(feedback_[FEEDBACK_TIMBRE]);
     text[1] = DialGlyph(feedback_[FEEDBACK_COLOR]);
-    text[2] = DialGlyph(feedback_[FEEDBACK_MOD1]);
-    text[3] = DialGlyph(feedback_[FEEDBACK_MOD2]);
+    text[2] = DialGlyph(feedback_[FEEDBACK_CUTOFF]);
+    text[3] = DialGlyph(feedback_[FEEDBACK_RESONANCE]);
   }
   return true;
 }
@@ -216,11 +218,22 @@ void Ui::RefreshDisplay() {
         }
         uint8_t value = settings.GetValue(setting_);
         if (setting_ == SETTING_OSCILLATOR_SHAPE &&
-            (settings.GetValue(SETTING_META_MODULATION) == 1 ||
-             settings.GetValue(SETTING_METASEQ) )) {
+            settings.GetValue(SETTING_META_MODULATION) ==
+                FM_DESTINATION_META) {
           value = meta_shape_;
         }
-        display_.Print(settings.metadata(setting_).strings[value]);
+        const SettingMetadata& metadata = settings.metadata(setting_);
+        if (metadata.min_value == 0 && metadata.max_value == 127) {
+          // 0..127 values: level glyph + number, e.g. [glyph] 64.
+          char text[kDisplayWidth + 1] = "    ";
+          text[0] = MeterGlyph(value);
+          text[1] = value >= 100 ? '1' : ' ';
+          text[2] = value >= 10 ? '0' + (value / 10) % 10 : ' ';
+          text[3] = '0' + value % 10;
+          display_.Print(text);
+        } else {
+          display_.Print(metadata.strings[value]);
+        }
       }
       break;
     
@@ -235,7 +248,7 @@ void Ui::RefreshDisplay() {
           }
           display_.Print(text);
         } else {
-          display_.Print(settings.metadata(setting_).name);
+          display_.Print(settings.setting_name(setting_));
         }
       }
       break;
@@ -275,9 +288,8 @@ void Ui::OnLongClick() {
            mode_ = MODE_SPLASH;
         }
       } else {
-        if (setting_ == SETTING_OSCILLATOR_SHAPE) {
-           settings.Save();
-        }   
+        // Back to the main screen: keep every edit.
+        settings.Save();
         // short-cut   
         last_setting_ = setting_;
         last_setting_index_ = setting_index_;
@@ -304,6 +316,12 @@ void Ui::OnClick() {
   switch (mode_) {
     case MODE_EDIT:
       mode_ = MODE_MENU;
+      if (setting_ == SETTING_OSCILLATOR_SHAPE) {
+        // From the main screen, go straight to the engine's first
+        // advanced parameter.
+        setting_index_ = 1;
+        setting_ = settings.setting_at_index(setting_index_);
+      }
       break;
 
     case MODE_MENU:
@@ -404,8 +422,7 @@ void Ui::DoEvents() {
   if (queue_.idle_time() >= 50 &&
       setting_ == SETTING_OSCILLATOR_SHAPE &&
       mode_ == MODE_EDIT &&
-      (settings.GetValue(SETTING_META_MODULATION) == 1 || 
-       settings.GetValue(SETTING_METASEQ) )) {
+      settings.GetValue(SETTING_META_MODULATION) == FM_DESTINATION_META) {
     refresh_display_ = true;
   }
   DetectControlMovement(now);

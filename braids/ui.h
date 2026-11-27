@@ -96,22 +96,20 @@ class Ui {
   // Live values for the display views and popups, called once per block.
   //   timbre, color: final engine parameters (0..32767).
   //   cutoff, resonance: output filter, 0..127.
-  //   mod1, mod2: MOD1/MOD2 envelope/LFO levels (0..65535).
   //   level: peak absolute output level of the block (0..32767).
+  //   fine: FINE knob position, 0..4095 (same scale as the ADC codes).
   inline void UpdateFeedback(
       uint16_t timbre,
       uint16_t color,
       uint8_t cutoff,
       uint8_t resonance,
-      uint16_t mod1,
-      uint16_t mod2,
-      uint16_t level) {
+      uint16_t level,
+      int16_t fine) {
     feedback_[FEEDBACK_TIMBRE] = timbre >> 8;
     feedback_[FEEDBACK_COLOR] = color >> 8;
     feedback_[FEEDBACK_CUTOFF] = cutoff;
     feedback_[FEEDBACK_RESONANCE] = resonance;
-    feedback_[FEEDBACK_MOD1] = mod1 >> 9;
-    feedback_[FEEDBACK_MOD2] = mod2 >> 9;
+    fine_ = fine;
     if (level > level_peak_) {
       level_peak_ = level;
     }
@@ -161,14 +159,14 @@ class Ui {
     FEEDBACK_COLOR,
     FEEDBACK_CUTOFF,
     FEEDBACK_RESONANCE,
-    FEEDBACK_MOD1,
-    FEEDBACK_MOD2,
     FEEDBACK_LAST
   };
   uint8_t feedback_[FEEDBACK_LAST];  // 0..127
   uint16_t level_peak_;
 
-  int16_t control_reference_[4];   // ADC codes at the last detected move
+  int16_t fine_;                   // FINE knob, 0..4095
+  // TIMBRE, COLOR, FM, FINE positions at the last detected move.
+  int16_t control_reference_[4];
   int8_t popup_feedback_;          // Feedback index, -1 = no popup
   char popup_letter_;
   uint32_t popup_time_;

@@ -191,6 +191,7 @@ struct ClockedNoiseState {
   uint32_t rng_state;
   int32_t seed;
   int16_t sample;
+  int32_t slewed;  // SLEW output state
 };
 
 // MutatedHypnoise engines.
@@ -203,9 +204,10 @@ struct VowelMorphState {
 
 struct VosimPlusState {
   uint32_t pulse_phase;
-  uint32_t pulse_increment;
+  uint32_t pulse_increment;  // current (chirped) pulse increment
   int32_t amplitude;
   int32_t dc;
+  uint8_t pulse_count;
 };
 
 static const size_t kNumDriftVoices = 7;
@@ -310,6 +312,16 @@ class DigitalOscillator {
     strike_ = true;
   }
 
+  // Advanced engine parameters (see engine_params.cc), 0..127 each.
+  inline void set_extras(const uint8_t* extras) {
+    extra_[0] = extras[0];
+    extra_[1] = extras[1];
+    extra_[2] = extras[2];
+  }
+
+  // Also used by the output stage (ring modulator / sub oscillator).
+  static uint32_t ComputePhaseIncrement(int16_t midi_pitch);
+
   void Render(const uint8_t* sync, int16_t* buffer, uint8_t size);
   
  private:
@@ -351,8 +363,23 @@ class DigitalOscillator {
  
   void RenderSilence(const uint8_t*, int16_t*, uint8_t);
   
-  uint32_t ComputePhaseIncrement(int16_t midi_pitch);
-  uint32_t ComputeDelay(int16_t midi_pitch);
+  void ConfigurePhaseWarp();
+  inline uint32_t WarpPhase(uint32_t phase) const {
+    if (!warp_enabled_) {
+      return phase;
+    }
+    if (warp_sync_ != 256) {
+      phase = (phase >> 8) * warp_sync_;  // wraps: internal hard sync
+    }
+    if (warp_knee_) {
+      uint32_t x = phase >> 16;
+      phase = x < warp_knee_
+          ? x * warp_slope_a_
+          : 0x80000000UL + (x - warp_knee_) * warp_slope_b_;
+    }
+    return phase & warp_mask_;
+  }
+uint32_t ComputeDelay(int16_t midi_pitch);
   int16_t InterpolateFormantParameter(
       const int16_t table[][kNumFormants][kNumFormants],
       int16_t x,
@@ -369,6 +396,14 @@ class DigitalOscillator {
   int16_t pitch_;
   
   uint8_t active_voice_;
+
+  uint8_t extra_[3];
+  bool warp_enabled_;
+  uint32_t warp_sync_;     // phase multiplier, Q8
+  uint32_t warp_knee_;     // phase distortion knee, Q16 (0 = off)
+  uint32_t warp_slope_a_;
+  uint32_t warp_slope_b_;
+  uint32_t warp_mask_;     // phase quantization
   
   bool init_;
   bool strike_;

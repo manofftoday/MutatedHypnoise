@@ -50,6 +50,29 @@ static const uint16_t kPitchTableStart = 128 * 128;
 static const uint16_t kOctave = 12 * 128;
 
 
+// Advanced engine parameters: extra_[0..2], 0..127 (engine_params.cc).
+// Every default value reproduces the original engine exactly.
+
+// "OCT" parameters: 0..42 = -1 octave, 43..85 = 0, 86..127 = +1 octave.
+static inline int32_t OctaveShift(uint8_t value) {
+  return value < 43 ? -(12 << 7) : (value < 86 ? 0 : (12 << 7));
+}
+
+// Wavetable engines: WARP (phase distortion), SYNC (internal hard sync,
+// x1..x8) and QUAN (phase quantization: stepped, lo-fi playback).
+void DigitalOscillator::ConfigurePhaseWarp() {
+  warp_enabled_ = extra_[0] || extra_[1] || extra_[2];
+  warp_sync_ = 256 + (extra_[1] * 1792 >> 7);
+  // Knee from 1/2 (no warp) down to ~1/40 of the period.
+  warp_knee_ = extra_[0] ? 32768 - (extra_[0] * 248) : 0;
+  if (warp_knee_) {
+    warp_slope_a_ = 0x80000000UL / warp_knee_;
+    warp_slope_b_ = 0x80000000UL / (65536 - warp_knee_);
+  }
+  warp_mask_ = extra_[2] ? 0xffffffffUL << (25 + (extra_[2] * 6 >> 7)) :
+      0xffffffffUL;
+}
+
 uint32_t DigitalOscillator::ComputePhaseIncrement(int16_t midi_pitch) {
   if (midi_pitch >= kPitchTableStart) {
     midi_pitch = kPitchTableStart - 1;
@@ -109,7 +132,12 @@ void DigitalOscillator::Render(
   }    
   
   RenderFn fn = fn_table_[shape_];
-  
+
+  if (shape_ >= OSC_SHAPE_WAVETABLES &&
+      shape_ <= OSC_SHAPE_WAVE_PARAPHONIC) {
+    ConfigurePhaseWarp();
+  }
+
   if (shape_ != previous_shape_) {
     Init();
     previous_shape_ = shape_;
@@ -150,7 +178,7 @@ void DigitalOscillator::RenderSawSwarm(
     }
     strike_ = false;
   }
-  int32_t hp_cutoff = pitch_;
+  int32_t hp_cutoff = pitch_ + (static_cast<int32_t>(extra_[0]) - 64) * 96;
   if (parameter_[1] < 10922) {
     hp_cutoff += ((parameter_[1] - 10922) * 24) >> 5;
   } else {
@@ -164,6 +192,7 @@ void DigitalOscillator::RenderSawSwarm(
   
   int32_t f = Interpolate824(lut_svf_cutoff, hp_cutoff << 17);
   int32_t damp = lut_svf_damp[0];
+  uint8_t num_voices = 1 + (extra_[2] * 6 + 63) / 127;
   int32_t bp = state_.saw.bp;
   int32_t lp = state_.saw.lp;
 
@@ -192,7 +221,22 @@ void DigitalOscillator::RenderSawSwarm(
     sample += state_.saw.phase[3] >> 19;
     sample += state_.saw.phase[4] >> 19;
     sample += state_.saw.phase[5] >> 19;
-    sample = Interpolate88(ws_moderate_overdrive, sample + 32768);
+    if (num_voices < 7) {
+      // VOIC: drop the outer voices, keep the level.
+      for (uint8_t i = num_voices - 1; i < 6; ++i) {
+        sample -= (state_.saw.phase[i] >> 19) - 4096;
+      }
+      sample = sample * 7 / num_voices;
+      CLIP(sample)
+    }
+    if (extra_[1] == 127) {
+      sample = Interpolate88(ws_moderate_overdrive, sample + 32768);
+    } else {
+      // DRIV: blend clean -> overdriven.
+      sample = Mix(sample,
+                   Interpolate88(ws_moderate_overdrive, sample + 32768),
+                   extra_[1] << 9);
+    }
     
     notch = sample - (bp * damp >> 15);
     lp += f * bp >> 15;
@@ -232,30 +276,51 @@ void DigitalOscillator::RenderComb(
   
   uint32_t delay_ptr = phase_;
   delay_ptr =  delay_ptr % kCombDelayLength;
+  bool damping = extra_[0] != 0;
+  int32_t damping_coefficient = 32767 - (extra_[0] << 8);
+  int32_t lp = static_cast<int32_t>(state_.ffm.modulator_phase);
   while (size--) {
     int32_t in = *buffer;
     uint32_t offset = delay_ptr + 2 * kCombDelayLength - delay_integral;
     int32_t a = dl[offset % kCombDelayLength];
     int32_t b = dl[(offset - 1) % kCombDelayLength];
     int32_t delayed_sample = a + (((b - a) * (delay_fractional >> 1)) >> 15);
+    if (damping) {
+      // DAMP: one-pole low-pass in the loop.
+      lp += (delayed_sample - lp) * damping_coefficient >> 15;
+      delayed_sample = lp;
+    }
     int32_t feedback = (delayed_sample * resonance >> 15) + (in >> 1);
     CLIP(feedback)
+    if (extra_[2]) {
+      // SAT: saturation in the loop.
+      feedback = Mix(feedback,
+                     Interpolate88(ws_moderate_overdrive, feedback + 32768),
+                     extra_[2] << 9);
+    }
     dl[delay_ptr] = feedback;
-    int32_t out = (in + (delayed_sample << 1)) >> 1;
+    int32_t out = extra_[1] == 64
+        ? (in + (delayed_sample << 1)) >> 1
+        : (in * (128 - extra_[1]) + delayed_sample * extra_[1] * 2) >> 7;
     CLIP(out)
     *buffer++ = out;
     delay_ptr = (delay_ptr + 1) % kCombDelayLength;
   }
   phase_ = delay_ptr;
+  state_.ffm.modulator_phase = static_cast<uint32_t>(lp);
 }
 
 void DigitalOscillator::RenderVosim(
     const uint8_t* sync,
     int16_t* buffer,
     uint8_t size) {
+  int32_t octave = OctaveShift(extra_[2]);
   for (size_t i = 0; i < 2; ++i) {
-    state_.vow.formant_increment[i] = ComputePhaseIncrement(parameter_[i] >> 1);
+    state_.vow.formant_increment[i] = ComputePhaseIncrement(
+        (parameter_[i] >> 1) + octave);
   }
+  int32_t level_1 = extra_[0];
+  int32_t level_2 = extra_[1];
   while (size--) {
     phase_ += phase_increment_;
     if (*sync++) {
@@ -263,10 +328,12 @@ void DigitalOscillator::RenderVosim(
     }
     int32_t sample = 16384 + 8192;
     state_.vow.formant_phase[0] += state_.vow.formant_increment[0];
-    sample += Interpolate824(wav_sine, state_.vow.formant_phase[0]) >> 1;
-    
+    sample += Interpolate824(wav_sine, state_.vow.formant_phase[0]) *
+        level_1 >> 7;
+
     state_.vow.formant_phase[1] += state_.vow.formant_increment[1];
-    sample += Interpolate824(wav_sine, state_.vow.formant_phase[1]) >> 2;
+    sample += Interpolate824(wav_sine, state_.vow.formant_phase[1]) *
+        level_2 >> 8;
     
     sample = sample * (Interpolate824(lut_bell, phase_) >> 1) >> 15;
     if (phase_ < phase_increment_) {
@@ -275,6 +342,7 @@ void DigitalOscillator::RenderVosim(
       sample = 0;
     }
     sample -= 16384 + 8192;
+    CLIP(sample)
     *buffer++ = sample;
   }
 }
@@ -317,7 +385,7 @@ void DigitalOscillator::RenderVowel(
   uint16_t formant_shift = (200 + (parameter_[1] >> 6));
   if (strike_) {
     strike_ = false;
-    state_.vow.consonant_frames = 160;
+    state_.vow.consonant_frames = 160 * extra_[0] >> 6;
     uint16_t index = (Random::GetSample() + 1) & 7;
     for (uint8_t i = 0; i < 3; ++i) {
       state_.vow.formant_increment[i] = \
@@ -367,6 +435,15 @@ void DigitalOscillator::RenderVowel(
       state_.vow.formant_phase[1] = 0;
       state_.vow.formant_phase[2] = 0;
       sample = 0;
+    }
+    if (extra_[1] || extra_[2] != 64) {
+      int32_t s = sample;
+      if (extra_[1]) {
+        s += Random::GetSample() * extra_[1] >> 8;  // NOIS: breath
+      }
+      s = s * (16 + (extra_[2] * 3 >> 2)) >> 6;  // DRIV: 0.25x..1.7x
+      CLIP(s)
+      sample = s;
     }
     sample = Interpolate88(ws_moderate_overdrive, sample + 32768);
     *buffer++ = sample;
@@ -484,6 +561,7 @@ void DigitalOscillator::RenderVowelFof(
   
   // This thing is running at SR / 2.
   phase_increment_ <<= 1;
+  int32_t formant_shift = (static_cast<int32_t>(extra_[2]) - 64) * 24;
   
   int16_t previous_sample = state_.fof.prevous_sample;
   while (size) {
@@ -530,16 +608,21 @@ void DigitalOscillator::RenderVowelFof(
                 formant_f_data,
                 parameter_[1],
                 parameter_[0],
-                j)) << 1;
-        state_.fof.fof[i][j].amplitude = InterpolateFormantParameter(
+                j) + formant_shift) << 1;
+        int32_t amplitude = InterpolateFormantParameter(
             formant_a_data,
             parameter_[1],
             parameter_[0],
             j);
+        if (j) {
+          amplitude = amplitude * extra_[1] >> 6;  // BRIT
+          if (amplitude > 65535) amplitude = 65535;
+        }
+        state_.fof.fof[i][j].amplitude = amplitude;
         state_.fof.fof[i][j].phase = 0;
       }
       state_.fof.envelope_phase[i] = 0;
-      state_.fof.envelope_phase_increment[i] = 16384 + 8192;
+      state_.fof.envelope_phase_increment[i] = (extra_[0] + 32) << 8;
       // Make sure that the envelope duration does not exceed N periods.
       // If this happens, this would cause a discontinuity as we only have
       // N overlapping FOFs.
@@ -566,21 +649,34 @@ void DigitalOscillator::RenderFm(
     uint8_t size) {
   uint32_t modulator_phase = state_.modulator_phase;
   uint32_t modulator_phase_increment = ComputePhaseIncrement(
-      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1)) >> 1;
-  
-  BEGIN_INTERPOLATE_PARAMETER_0    
-  
+      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1) +
+      (static_cast<int32_t>(extra_[1]) - 64) * 2) >> 1;
+  int32_t feedback = extra_[0];
+  int32_t shape_gain = 64 + extra_[2];
+  int32_t modulator = state_.ffm.previous_sample;
+
+  BEGIN_INTERPOLATE_PARAMETER_0
+
   while (size--) {
     INTERPOLATE_PARAMETER_0
-    
+
     phase_ += phase_increment_;
     if (*sync++) {
       phase_ = modulator_phase = 0;
     }
     modulator_phase += modulator_phase_increment;
 
-    uint32_t pm = (
-        Interpolate824(wav_sine, modulator_phase) * parameter_0) << 2;
+    if (feedback || extra_[2]) {
+      // FDBK: modulator self-feedback. MODW: modulator sine -> square.
+      modulator = Interpolate824(
+          wav_sine, modulator_phase +
+          (static_cast<uint32_t>(modulator * feedback) << 9));
+      modulator = modulator * shape_gain >> 6;
+      CLIP(modulator)
+    } else {
+      modulator = Interpolate824(wav_sine, modulator_phase);
+    }
+    uint32_t pm = (modulator * parameter_0) << 2;
     *buffer++ = Interpolate824(wav_sine, phase_ + pm);
   }
   
@@ -588,6 +684,7 @@ void DigitalOscillator::RenderFm(
   
   previous_parameter_[0] = parameter_[0];
   state_.modulator_phase = modulator_phase;
+  state_.ffm.previous_sample = modulator;
 }
 
 void DigitalOscillator::RenderFeedbackFm(
@@ -598,12 +695,14 @@ void DigitalOscillator::RenderFeedbackFm(
   uint32_t modulator_phase = state_.ffm.modulator_phase;
 
   int32_t attenuation = pitch_ - (72 << 7) + ((parameter_[1] - 16384) >> 1);
-  attenuation = 32767 - attenuation * 4;
+  attenuation = 32767 - (attenuation * 4 * extra_[2] >> 6);
   if (attenuation < 0) attenuation = 0;
   if (attenuation > 32767) attenuation = 32767;
-  
+  int32_t feedback = extra_[0] << 8;  // 64 = original (<< 14)
+
   uint32_t modulator_phase_increment = ComputePhaseIncrement(
-      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1)) >> 1;
+      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1) +
+      (static_cast<int32_t>(extra_[1]) - 64) * 2) >> 1;
   
   BEGIN_INTERPOLATE_PARAMETER_0    
   
@@ -619,7 +718,7 @@ void DigitalOscillator::RenderFeedbackFm(
 
     int32_t pm;
     int32_t p = parameter_0 * attenuation >> 15;
-    pm = previous_sample << 14;
+    pm = previous_sample * feedback;
     pm = (
         Interpolate824(wav_sine, modulator_phase + pm) * p) << 1;
     previous_sample = Interpolate824(wav_sine, phase_ + pm);
@@ -637,8 +736,11 @@ void DigitalOscillator::RenderChaoticFeedbackFm(
     int16_t* buffer,
     uint8_t size) {
   uint32_t modulator_phase_increment = ComputePhaseIncrement(
-      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1)) >> 1;
+      (12 << 7) + pitch_ + ((parameter_[1] - 16384) >> 1) +
+      (static_cast<int32_t>(extra_[1]) - 64) * 2) >> 1;
   int16_t previous_sample = state_.ffm.previous_sample;
+  int32_t chaos = extra_[0];
+  int32_t index_gain = extra_[2];
   uint32_t modulator_phase = state_.ffm.modulator_phase;
   
   BEGIN_INTERPOLATE_PARAMETER_0
@@ -651,12 +753,13 @@ void DigitalOscillator::RenderChaoticFeedbackFm(
       phase_ = modulator_phase = 0;
     }
     
-    int32_t pm;
-    pm = (Interpolate824(wav_sine, modulator_phase) * parameter_0) << 1;
+    int32_t index = parameter_0 * index_gain >> 6;
+    uint32_t pm = static_cast<uint32_t>(
+        Interpolate824(wav_sine, modulator_phase) * index) << 1;
     previous_sample = Interpolate824(wav_sine, phase_ + pm);
     *buffer++ = previous_sample;
     modulator_phase += (modulator_phase_increment >> 8) * \
-        (129 + (previous_sample >> 9));
+        (129 + (previous_sample * chaos >> 15));
   }
   
   END_INTERPOLATE_PARAMETER_0
@@ -698,7 +801,11 @@ void DigitalOscillator::RenderStruckBell(
   
   if (strike_) {
     for (size_t i = 0; i < kNumBellPartials; ++i) {
-      state_.add.partial_amplitude[i] = kBellPartialAmplitudes[i];
+      int32_t amplitude = kBellPartialAmplitudes[i];
+      if (i >= 5) amplitude = amplitude * extra_[1] >> 6;  // BRIT
+      if (i & 1) amplitude = amplitude * extra_[2] >> 6;   // ODD
+      if (amplitude > 32767) amplitude = 32767;
+      state_.add.partial_amplitude[i] = amplitude;
       state_.add.partial_phase[i] = (1L << 30);
     }
     strike_ = false;
@@ -707,7 +814,7 @@ void DigitalOscillator::RenderStruckBell(
   }
   
   for (size_t i = first_partial; i < last_partial; ++i) {
-    int16_t partial_pitch = pitch_ + kBellPartials[i];
+    int16_t partial_pitch = pitch_ + (kBellPartials[i] * extra_[0] >> 6);
     if (i & 1) {
       partial_pitch += parameter_[1] >> 7;
     } else {
@@ -754,7 +861,7 @@ void DigitalOscillator::RenderPlucked(
   phase_increment_ <<= 1;
   if (strike_) {
     ++active_voice_;
-    if (active_voice_ >= kNumPluckVoices) {
+    if (active_voice_ >= 1 + (extra_[1] * 2 + 63) / 127) {  // VOIC
       active_voice_ = 0;
     }
     // Find the optimal oversampling rate.
@@ -797,6 +904,9 @@ void DigitalOscillator::RenderPlucked(
   } else {
     loss = 0;
   }
+  loss = loss * extra_[0] >> 6;  // DAMP
+  int32_t noise_weight = extra_[2] * 3 >> 1;  // NOIS, 96 = original
+  if (noise_weight > 128) noise_weight = 128;
   
   int16_t previous_sample = state_.plk[0].previous_sample;
 
@@ -809,8 +919,8 @@ void DigitalOscillator::RenderPlucked(
       // line.
       if (p->initialization_ptr) {
         --p->initialization_ptr;
-        int32_t excitation_sample = (dl[p->initialization_ptr] + \
-            3 * Random::GetSample()) >> 2;
+        int32_t excitation_sample = (dl[p->initialization_ptr] * \
+            (128 - noise_weight) + Random::GetSample() * noise_weight) >> 7;
         dl[p->initialization_ptr] = excitation_sample;
         sample += excitation_sample;
       } else {
@@ -869,7 +979,13 @@ void DigitalOscillator::RenderBowed(
     memset(&state_, 0, sizeof(state_));
     strike_ = false;
   }
-  int16_t parameter_0 = 172 - (parameter_[0]  >> 8);
+  int16_t parameter_0 = 172 - (parameter_[0]  >> 8) +
+      (static_cast<int16_t>(extra_[0]) - 64);  // PRES
+  if (parameter_0 < 1) parameter_0 = 1;
+  int32_t damping = (static_cast<int32_t>(extra_[2]) - 64) * 96;  // DAMP
+  int32_t bridge_lp_gain = kBridgeLPGain - damping;
+  int32_t bridge_lp_pole = kBridgeLPPole1 + damping;
+  int32_t body_gain = kBiquadGain * (16 + (extra_[1] * 3 >> 2)) >> 6;  // BODY
   int16_t parameter_1 = 6 + (parameter_[1]  >> 9);
 
   uint16_t delay_ptr = state_.phy.delay_ptr;
@@ -910,7 +1026,8 @@ void DigitalOscillator::RenderBowed(
     int32_t bridge_value = Mix(
         bridge_dl_a, bridge_dl_b, bridge_delay_fractional) << 8;
     int32_t nut_value = Mix(nut_dl_a, nut_dl_b, neck_delay_fractional) << 8;
-    lp_state = (bridge_value * kBridgeLPGain + lp_state * kBridgeLPPole1) >> 15;
+    lp_state = (bridge_value * bridge_lp_gain +
+                lp_state * bridge_lp_pole) >> 15;
     int32_t bridge_reflection = -lp_state;
     int32_t nut_reflection = -nut_value;
     int32_t string_velocity = bridge_reflection + nut_reflection;
@@ -933,7 +1050,7 @@ void DigitalOscillator::RenderBowed(
     dl_b[delay_ptr % kWGBridgeLength] = (nut_reflection + new_velocity) >> 8;
     ++delay_ptr;
     
-    int32_t temp = bridge_value * kBiquadGain >> 15;
+    int32_t temp = bridge_value * body_gain >> 15;
     temp += biquad_y0 * kBiquadPole1 >> 12;
     temp += biquad_y1 * kBiquadPole2 >> 12;
     int32_t out = temp - biquad_y1;
@@ -991,12 +1108,17 @@ void DigitalOscillator::RenderBlown(
     normalized_pitch = 127;
   }
   uint16_t filter_coefficient = lut_flute_body_filter[normalized_pitch];
+  int32_t breath = kBreathPressure * (32 + (extra_[0] >> 1)) >> 6;  // BRTH
+  if (breath > 32767) breath = 32767;
+  int32_t reed_slope = kReedSlope * extra_[1] >> 6;  // REED
+  int32_t reflection = kReflectionCoefficient * (48 + (extra_[2] >> 2)) >> 6;
+  if (reflection < -4000) reflection = -4000;  // REFL, keep |r| < 1
   while (size--) {
     phase_ += phase_increment_;
-    
+
     int32_t breath_pressure = Random::GetSample() * parameter >> 15;
-    breath_pressure = breath_pressure * kBreathPressure >> 15;
-    breath_pressure += kBreathPressure;
+    breath_pressure = breath_pressure * breath >> 15;
+    breath_pressure += breath;
     
     uint16_t bore_delay_ptr = delay_ptr + 2 * kWGBoreLength \
         - bore_delay_integral;
@@ -1007,9 +1129,9 @@ void DigitalOscillator::RenderBlown(
     int32_t pressure_delta = (dl_value >> 1) + lp_state;
     lp_state = dl_value >> 1;
     
-    pressure_delta = kReflectionCoefficient * pressure_delta >> 12;
+    pressure_delta = reflection * pressure_delta >> 12;
     pressure_delta -= breath_pressure;
-    int32_t reed = (pressure_delta * kReedSlope >> 12) + kReedOffset;
+    int32_t reed = (pressure_delta * reed_slope >> 12) + kReedOffset;
     CLIP(reed)
     int32_t out = pressure_delta * reed >> 15;
     out += breath_pressure;
@@ -1051,7 +1173,10 @@ void DigitalOscillator::RenderFluted(
 
   // Setup delay times and interpolation coefficients.
   uint32_t bore_delay = (delay_ << 1) - (2 << 16);
-  uint32_t jet_delay = (bore_delay >> 8) * (48 + (parameter_[1]  >> 10));
+  int32_t jet_ratio = 48 + (parameter_[1] >> 10) +
+      ((static_cast<int32_t>(extra_[1]) - 64) >> 2);  // JET
+  if (jet_ratio < 8) jet_ratio = 8;
+  uint32_t jet_delay = (bore_delay >> 8) * jet_ratio;
   bore_delay -= jet_delay;
   while (bore_delay > ((kWGFBoreLength - 1) << 16)
          || jet_delay > ((kWGJetLength - 1) << 16)) {
@@ -1063,8 +1188,14 @@ void DigitalOscillator::RenderFluted(
   uint32_t jet_delay_integral = jet_delay >> 16;
   uint16_t jet_delay_fractional = jet_delay & 0xffff;
   
-  uint16_t breath_intensity = 2100 - (parameter_[0] >> 4);
-  uint16_t filter_coefficient = lut_flute_body_filter[pitch_ >> 7];
+  uint16_t breath_intensity = (2100 - (parameter_[0] >> 4)) * extra_[0] >> 6;
+  int32_t body_index = pitch_ >> 7;
+  if (extra_[2] != 64) {  // DAMP
+    body_index += (static_cast<int32_t>(extra_[2]) - 64) >> 1;
+    if (body_index < 0) body_index = 0;
+    if (body_index > 127) body_index = 127;
+  }
+  uint16_t filter_coefficient = lut_flute_body_filter[body_index];
   while (size--) {
     phase_ += phase_increment_;
     
@@ -1218,9 +1349,11 @@ void DigitalOscillator::RenderWavetables(
       phase_ = 0;
     }
     
-    sample = Crossfade(wave[0], wave[1], phase_ >> 1, wave_pointer) >> 1;
+    sample = Crossfade(
+        wave[0], wave[1], WarpPhase(phase_) >> 1, wave_pointer) >> 1;
     phase_ += phase_increment;
-    sample += Crossfade(wave[0], wave[1], phase_ >> 1, wave_pointer) >> 1;
+    sample += Crossfade(
+        wave[0], wave[1], WarpPhase(phase_) >> 1, wave_pointer) >> 1;
     *buffer++ = sample;
   }
 }
@@ -1261,14 +1394,16 @@ void DigitalOscillator::RenderWaveMap(
       phase_ = 0;
     }
     
+    uint32_t p = WarpPhase(phase_) >> 1;
     sample = Mix(
-        Crossfade(wave[0][0], wave[0][1], phase_ >> 1, wave_xfade[1]),
-        Crossfade(wave[1][0], wave[1][1], phase_ >> 1, wave_xfade[1]),
+        Crossfade(wave[0][0], wave[0][1], p, wave_xfade[1]),
+        Crossfade(wave[1][0], wave[1][1], p, wave_xfade[1]),
         wave_xfade[0]) >> 1;
     phase_ += phase_increment;
+    p = WarpPhase(phase_) >> 1;
     sample += Mix(
-        Crossfade(wave[0][0], wave[0][1], phase_ >> 1, wave_xfade[1]),
-        Crossfade(wave[1][0], wave[1][1], phase_ >> 1, wave_xfade[1]),
+        Crossfade(wave[0][0], wave[0][1], p, wave_xfade[1]),
+        Crossfade(wave[1][0], wave[1][1], p, wave_xfade[1]),
         wave_xfade[0]) >> 1;
     *buffer++ = sample;
   }
@@ -1313,14 +1448,14 @@ void DigitalOscillator::RenderWaveLine(
     while (size--) {
       int32_t sample = 0;
       
-      rough = Crossfade(wave_0, wave_1, (phase >> 1) & 0xfe000000, rough_xfade);
-      smooth = Crossfade(wave_0, wave_1, phase >> 1, rough_xfade);
+      rough = Crossfade(wave_0, wave_1, (WarpPhase(phase) >> 1) & 0xfe000000, rough_xfade);
+      smooth = Crossfade(wave_0, wave_1, WarpPhase(phase) >> 1, rough_xfade);
       sample += Mix(rough, smooth, balance);
       phase += phase_increment;
       rough_xfade += rough_xfade_increment;
       
-      rough = Crossfade(wave_0, wave_1, (phase >> 1) & 0xfe000000, rough_xfade);
-      smooth = Crossfade(wave_0, wave_1, phase >> 1, rough_xfade);
+      rough = Crossfade(wave_0, wave_1, (WarpPhase(phase) >> 1) & 0xfe000000, rough_xfade);
+      smooth = Crossfade(wave_0, wave_1, WarpPhase(phase) >> 1, rough_xfade);
       sample += Mix(rough, smooth, balance);
       phase += phase_increment;
       rough_xfade += rough_xfade_increment;
@@ -1331,14 +1466,14 @@ void DigitalOscillator::RenderWaveLine(
     while (size--) {
       int32_t sample = 0;
       
-      rough = Crossfade(wave_0, wave_1, phase >> 1, rough_xfade);
-      smooth = Crossfade(wave_1, wave_2, phase >> 1, smooth_xfade);
+      rough = Crossfade(wave_0, wave_1, WarpPhase(phase) >> 1, rough_xfade);
+      smooth = Crossfade(wave_1, wave_2, WarpPhase(phase) >> 1, smooth_xfade);
       sample += Mix(rough, smooth, balance);
       phase += phase_increment;
       rough_xfade += rough_xfade_increment;
       
-      rough = Crossfade(wave_0, wave_1, phase >> 1, rough_xfade);
-      smooth = Crossfade(wave_1, wave_2, phase >> 1, smooth_xfade);
+      rough = Crossfade(wave_0, wave_1, WarpPhase(phase) >> 1, rough_xfade);
+      smooth = Crossfade(wave_1, wave_2, WarpPhase(phase) >> 1, smooth_xfade);
       sample += Mix(rough, smooth, balance);
       phase += phase_increment;
       rough_xfade += rough_xfade_increment;
@@ -1349,13 +1484,13 @@ void DigitalOscillator::RenderWaveLine(
     while (size--) {
       int32_t sample = 0;
       
-      smooth = Crossfade(wave_1, wave_2, phase >> 1, smooth_xfade);
-      rough = Crossfade(wave_1, wave_2, (phase >> 1) & 0xfe000000, smooth_xfade);
+      smooth = Crossfade(wave_1, wave_2, WarpPhase(phase) >> 1, smooth_xfade);
+      rough = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xfe000000, smooth_xfade);
       sample += Mix(smooth, rough, balance);
       phase += phase_increment;
 
-      smooth = Crossfade(wave_1, wave_2, phase >> 1, smooth_xfade);
-      rough = Crossfade(wave_1, wave_2, (phase >> 1) & 0xfe000000, smooth_xfade);
+      smooth = Crossfade(wave_1, wave_2, WarpPhase(phase) >> 1, smooth_xfade);
+      rough = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xfe000000, smooth_xfade);
       sample += Mix(smooth, rough, balance);
       phase += phase_increment;
 
@@ -1364,13 +1499,13 @@ void DigitalOscillator::RenderWaveLine(
   } else {
     while (size--) {
       int32_t sample = 0;
-      smooth = Crossfade(wave_1, wave_2, (phase >> 1) & 0xfe000000, smooth_xfade);
-      rough = Crossfade(wave_1, wave_2, (phase >> 1) & 0xf8000000, smooth_xfade);
+      smooth = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xfe000000, smooth_xfade);
+      rough = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xf8000000, smooth_xfade);
       sample += Mix(smooth, rough, balance);
       phase += phase_increment;
 
-      smooth = Crossfade(wave_1, wave_2, (phase >> 1) & 0xfe000000, smooth_xfade);
-      rough = Crossfade(wave_1, wave_2, (phase >> 1) & 0xf8000000, smooth_xfade);
+      smooth = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xfe000000, smooth_xfade);
+      rough = Crossfade(wave_1, wave_2, (WarpPhase(phase) >> 1) & 0xf8000000, smooth_xfade);
       sample += Mix(smooth, rough, balance);
       phase += phase_increment;
 
@@ -1445,22 +1580,22 @@ void DigitalOscillator::RenderWaveParaphonic(
     phase_2 += phase_increment[1];
     phase_3 += phase_increment[2];
 
-    sample += Crossfade(wave_1, wave_2, phase_0 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_1 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_2 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_3 >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_0) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_1) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_2) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_3) >> 1, wave_xfade);
     *buffer++ = sample >> 2;
-    
+
     phase_0 += phase_increment_0;
     phase_1 += phase_increment[0];
     phase_2 += phase_increment[1];
     phase_3 += phase_increment[2];
     
     sample = 0;
-    sample += Crossfade(wave_1, wave_2, phase_0 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_1 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_2 >> 1, wave_xfade);
-    sample += Crossfade(wave_1, wave_2, phase_3 >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_0) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_1) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_2) >> 1, wave_xfade);
+    sample += Crossfade(wave_1, wave_2, WarpPhase(phase_3) >> 1, wave_xfade);
     *buffer++ = sample >> 2;
     size -= 2;
   }
@@ -1614,11 +1749,13 @@ void DigitalOscillator::RenderClockedNoise(
    // to the sample rate.
    uint32_t phase = phase_;
    uint32_t phase_increment = phase_increment_;
-   for (uint8_t i = 0; i < 3; ++i) {
+   uint8_t num_shifts = extra_[2] * 6 >> 7;  // RATE, 3 = original
+   for (uint8_t i = 0; i < num_shifts; ++i) {
      if (phase_increment < (1UL << 31)) {
        phase_increment <<= 1;
      }
    }
+   int32_t slew = extra_[0] ? 32767 - (extra_[0] << 8) : 0;  // SLEW
    
    // Compute the period of the random generator.
    state->cycle_phase_increment = ComputePhaseIncrement(
@@ -1639,6 +1776,10 @@ void DigitalOscillator::RenderClockedNoise(
      // Clock.
      if (phase < phase_increment) {
        state->rng_state = state->rng_state * 1664525L + 1013904223L;
+       // RAND: chance to break out of the loop with a new random value.
+       if (extra_[1] && (Random::GetWord() >> 25) < extra_[1]) {
+         state->rng_state = Random::GetWord();
+       }
        state->cycle_phase += state->cycle_phase_increment;
        // Enforce period
        if (state->cycle_phase < state->cycle_phase_increment) {
@@ -1653,7 +1794,12 @@ void DigitalOscillator::RenderClockedNoise(
        // Make the clock rate an exact divisor of the sample rate.
        phase = phase_increment;
      }
-     *buffer++ = state->sample;
+     if (slew) {
+       state->slewed += (state->sample - state->slewed) * slew >> 15;
+       *buffer++ = state->slewed;
+     } else {
+       *buffer++ = state->sample;
+     }
    }
    phase_ = phase;
 }
@@ -1663,13 +1809,14 @@ void DigitalOscillator::RenderGranularCloud(
      int16_t* buffer,
      uint8_t size) {
    
+   uint32_t density = 512 + extra_[0] * 248;  // DENS, 0x4000 = original
    for (size_t i = 0; i < 4; ++i) {
      Grain* g = &state_.grain[i];
      // If a grain has reached the end of its envelope, reset it.
      if (g->envelope_phase > (1 << 24) ||
          g->envelope_phase_increment == 0) {
        g->envelope_phase_increment = 0;
-       if ((Random::GetWord() & 0xffff) < 0x4000) {
+       if ((Random::GetWord() & 0xffff) < density) {
          g->envelope_phase_increment = \
              lut_granular_envelope_rate[parameter_[0] >> 7] << 3;
          g->envelope_phase = 0;
@@ -1680,6 +1827,14 @@ void DigitalOscillator::RenderGranularCloud(
            g->phase_increment += phi * (pitch_mod >> 8);
          } else {
            g->phase_increment += phi * (pitch_mod >> 7);
+         }
+         // SCAT: octave scattering.
+         if (extra_[2] && (Random::GetWord() >> 25) < extra_[2]) {
+           if (Random::GetWord() & 1) {
+             g->phase_increment <<= 1;
+           } else {
+             g->phase_increment >>= 1;
+           }
          }
        }
      }
@@ -1715,8 +1870,19 @@ void DigitalOscillator::RenderGranularCloud(
      if (sample > 32767) {
        sample = 32767;
      }
+     if (extra_[1]) {
+       // WAVE: sine grains -> saw grains.
+       int32_t saw = 0;
+       for (uint8_t g = 0; g < 4; ++g) {
+         saw += (static_cast<int32_t>(state_.grain[g].phase >> 16) - 32768) *
+             lut_granular_envelope[state_.grain[g].envelope_phase >> 16] >> 17;
+       }
+       CLIP(saw)
+       sample = Mix(static_cast<int16_t>(sample), static_cast<int16_t>(saw),
+                    extra_[1] << 9);
+     }
      *buffer++ = sample;
-   } 
+   }
 }
 
 /*
@@ -1846,12 +2012,13 @@ void DigitalOscillator::RenderVowelMorph(
     uint8_t size) {
   VowelMorphState& v = state_.vmf;
   int32_t shift = (parameter_[1] - 16384) * 3 >> 5;  // +/-1536 = 1 octave
+  int16_t voice = extra_[0] << 8;  // VOIC: bass .. soprano (32 = tenor)
   for (uint8_t i = 0; i < 3; ++i) {
     int32_t f = InterpolateFormantParameter(
-        formant_f_data, 8192, parameter_[0], i) + shift;
+        formant_f_data, voice, parameter_[0], i) + shift;
     v.formant_increment[i] = ComputePhaseIncrement(f);
     v.formant_amplitude[i] = InterpolateFormantParameter(
-        formant_a_data, 8192, parameter_[0], i);
+        formant_a_data, voice, parameter_[0], i);
   }
   while (size--) {
     phase_ += phase_increment_;
@@ -1864,7 +2031,17 @@ void DigitalOscillator::RenderVowelMorph(
           kSinePhaseOffset;
     }
     uint32_t window = 65535 - (phase_ >> 16);
-    window = window * window >> 17;  // 0..32767
+    if (extra_[1] == 64) {
+      window = window * window >> 17;  // 0..32767
+    } else {
+      // WIND: linear (0) .. squared (64) .. cubed (127) window.
+      uint32_t squared = window * window >> 16;
+      uint32_t a = extra_[1] < 64 ? window : squared;
+      uint32_t b = extra_[1] < 64 ? squared : squared * window >> 16;
+      uint32_t x = extra_[1] < 64 ? extra_[1] << 10 : (extra_[1] - 64) << 10;
+      window = (a + ((static_cast<int32_t>(b - a) >> 1) *
+                     static_cast<int32_t>(x) >> 15)) >> 1;
+    }
 
     v.formant_phase[0] += v.formant_increment[0];
     v.formant_phase[1] += v.formant_increment[1];
@@ -1875,6 +2052,9 @@ void DigitalOscillator::RenderVowelMorph(
         v.formant_amplitude[1] >> 15;
     sample += wav_sine[v.formant_phase[2] >> 24] *
         v.formant_amplitude[2] >> 15;
+    if (extra_[2]) {
+      sample += Random::GetSample() * extra_[2] >> 7;  // BRTH
+    }
     sample = sample * static_cast<int32_t>(window) >> 14;
     // Partial formant cycles under the window are not zero-mean.
     v.dc += (sample - v.dc) >> 10;  // ~15 Hz
@@ -1894,8 +2074,11 @@ void DigitalOscillator::RenderVosimPlus(
     int16_t* buffer,
     uint8_t size) {
   VosimPlusState& v = state_.vsp;
-  uint32_t pulse_increment = ComputePhaseIncrement(
-      (48 << 7) + (parameter_[0] * 60 >> 8));
+  uint32_t base_increment = ComputePhaseIncrement(
+      (48 << 7) + (parameter_[0] * 60 >> 8) + OctaveShift(extra_[2]));
+  uint32_t pulse_increment = extra_[0] ? v.pulse_increment : base_increment;
+  int32_t chirp = 32768 - (extra_[0] << 5);  // CHRP: per-pulse ratio, Q15
+  uint8_t max_pulses = extra_[1] == 127 ? 255 : 1 + (extra_[1] >> 3);
   int32_t decay = 16384 + (parameter_[1] >> 1);
   if (decay > 32440) {
     decay = 32440;  // 0.99
@@ -1911,10 +2094,20 @@ void DigitalOscillator::RenderVosimPlus(
     if (phase_ < phase_increment_) {
       pulse_phase = 0;
       amplitude = 32767;
+      pulse_increment = base_increment;
+      v.pulse_count = 0;
     }
     pulse_phase += pulse_increment;
     if (pulse_phase < pulse_increment) {
       amplitude = amplitude * decay >> 15;
+      // PULS: silence after N pulses (classic VOSIM). CHRP: each pulse a
+      // bit lower than the previous one.
+      if (extra_[1] != 127 && ++v.pulse_count >= max_pulses) {
+        amplitude = 0;
+      }
+      if (extra_[0]) {
+        pulse_increment = (pulse_increment >> 15) * chirp;
+      }
     }
     // sin^2(pi t) = (1 - cos(2 pi t)) / 2, and wav_sine is -cos.
     int32_t pulse = (32767 + wav_sine[pulse_phase >> 24]) >> 1;
@@ -1925,6 +2118,7 @@ void DigitalOscillator::RenderVosimPlus(
     *buffer++ = sample;
   }
   v.pulse_phase = pulse_phase;
+  v.pulse_increment = pulse_increment;
   v.amplitude = amplitude;
   v.dc = dc;
 }
@@ -1951,11 +2145,15 @@ void DigitalOscillator::RenderDriftSwarm(
     }
     strike_ = false;
   }
-  // One voice gets a new target every 128 ms (each one every ~0.9 s).
+  // One voice gets a new target every 128 ms (each one every ~0.9 s) at
+  // RATE = 64; RATE scales that by 1/4..2.
+  uint8_t rate_shift = 13 - (extra_[0] >> 5);
   uint16_t counter = ++d.counter;
-  if ((counter & 511) == 0) {
-    d.target[(counter >> 9) % kNumDriftVoices] = Random::GetSample();
+  if ((counter & ((1 << (rate_shift - 2)) - 1)) == 0) {
+    d.target[(counter >> (rate_shift - 2)) % kNumDriftVoices] =
+        Random::GetSample();
   }
+  uint8_t num_voices = 1 + (extra_[2] * 6 + 63) / 127;  // VOIC
   int32_t spread = parameter_[0] * parameter_[0] >> 23;  // 0..127 per voice
   int32_t depth = parameter_[1] >> 7;
   depth = depth * depth >> 7;  // 0..508
@@ -1963,8 +2161,10 @@ void DigitalOscillator::RenderDriftSwarm(
   uint32_t increment[kNumDriftVoices];
   for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
     // ~0.5 s glide to the target (at the 4 kHz block rate).
-    d.drift[i] += ((static_cast<int32_t>(d.target[i]) << 8) - d.drift[i]) >> 11;
-    int32_t pitch = pitch_ + spread * (static_cast<int32_t>(i) - 3) +
+    d.drift[i] += ((static_cast<int32_t>(d.target[i]) << 8) - d.drift[i]) >>
+        rate_shift;
+    int32_t pitch = pitch_ +
+        (spread * (2 * static_cast<int32_t>(i) - (num_voices - 1)) >> 1) +
         ((d.drift[i] >> 8) * depth >> 15);
     increment[i] = ComputePhaseIncrement(pitch);
   }
@@ -1973,11 +2173,27 @@ void DigitalOscillator::RenderDriftSwarm(
       memset(d.phase, 0, sizeof(d.phase));
     }
     int32_t sample = 0;
-    for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
+    int32_t triangle = 0;
+    for (uint8_t i = 0; i < num_voices; ++i) {
       d.phase[i] += increment[i];
       sample += d.phase[i] >> 20;
+      if (extra_[1]) {
+        uint32_t p = d.phase[i];
+        triangle += (p & 0x80000000UL ? ~p : p) >> 19;
+      }
     }
-    sample = (sample - (kNumDriftVoices << 11)) << 1;
+    sample = (sample - (num_voices << 11)) << 1;
+    if (extra_[1]) {
+      // WAVE: saws -> triangles.
+      triangle = (triangle - (num_voices << 11)) << 1;
+      CLIP(sample)
+      CLIP(triangle)
+      sample = Mix(static_cast<int16_t>(sample), static_cast<int16_t>(triangle),
+                   extra_[1] << 9);
+    }
+    if (num_voices < kNumDriftVoices) {
+      sample = sample * kNumDriftVoices / num_voices;
+    }
     CLIP(sample)
     *buffer++ = Interpolate88(ws_moderate_overdrive, sample + 32768);
   }
@@ -2001,12 +2217,12 @@ void DigitalOscillator::RenderFoldDrone(
     f.burst = 32767;
     strike_ = false;
   }
-  f.burst -= f.burst >> 9;  // ~130 ms
-  f.lfo_phase += 53687;     // ~0.05 Hz at the 4 kHz block rate
+  f.burst -= f.burst >> (7 + (extra_[2] >> 5));  // BRST: ~130 ms at 64
+  f.lfo_phase += 53687 * extra_[0] >> 6;  // RATE: ~0.05 Hz at 64
   int32_t lfo = wav_sine[f.lfo_phase >> 24];
   // Drive in Q12: 1 (sin(pi/2 x)) to 8, +/-12.5% breathing, + up to 4 burst.
   int32_t drive = 4096 + (parameter_[0] * 7 >> 3);
-  drive += (drive >> 3) * lfo >> 15;
+  drive += ((drive >> 3) * extra_[1] >> 6) * lfo >> 15;  // DPTH
   drive += f.burst >> 1;
   while (size--) {
     phase_ += phase_increment_;
@@ -2043,7 +2259,9 @@ void DigitalOscillator::RenderSpectralDrone(
     s.shimmer_phase = Random::GetWord();
     strike_ = false;
   }
-  s.shimmer_phase += 26843;  // ~0.025 Hz, x3..x10 per partial
+  s.shimmer_phase += 26843 * extra_[1] >> 6;  // SRAT: ~0.025 Hz at 64
+  int32_t width = 64 + extra_[2] * 7;  // WIDT: 512 (2 partials) at 64
+  int32_t shimmer_base = 32768 - (extra_[0] << 6);  // SHIM
   int32_t stretch = (parameter_[1] - 16384) >> 3;  // Q14, +/-0.125
   int32_t center = parameter_[0] * 7 >> 7;         // partial index, Q8
   for (uint8_t i = 0; i < kNumSpectralPartials; ++i) {
@@ -2054,10 +2272,10 @@ void DigitalOscillator::RenderSpectralDrone(
     if (distance < 0) {
       distance = -distance;
     }
-    int32_t target = distance < 512 ? (512 - distance) * 48 : 0;
+    int32_t target = distance < width ? (width - distance) * 24576 / width : 0;
     target += 6144 >> i;  // 1/2^n floor keeps a body under the peak
     int32_t lfo = wav_sine[(s.shimmer_phase * (i + 3)) >> 24];
-    target = target * (28672 + (lfo >> 3)) >> 15;  // 0.75..1
+    target = target * (shimmer_base + (lfo * extra_[0] >> 9)) >> 15;
     if (pitch > (127 << 7)) {
       target = 0;  // above ~12.5 kHz: dropped (no aliasing)
     }

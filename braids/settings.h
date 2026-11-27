@@ -147,108 +147,6 @@ enum PitchRange {
   PITCH_RANGE_LFO  // This setting is hidden by default! But now unhidden!!
 };
 
-enum Setting {
-  SETTING_OSCILLATOR_SHAPE,
-  SETTING_RESOLUTION,
-  SETTING_RATE_INVERSION,
-  SETTING_TRIG_SOURCE,
-  SETTING_TRIG_DELAY,
-  SETTING_META_MODULATION,
-  SETTING_PITCH_RANGE,
-  SETTING_PITCH_OCTAVE,
-  SETTING_PITCH_QUANTIZER,
-  SETTING_VCO_DRIFT,
-  SETTING_BRIGHTNESS,
-  SETTING_MOD1_ATTACK_SHAPE,
-  SETTING_MOD2_ATTACK_SHAPE,
-  SETTING_MOD1_DECAY_SHAPE,
-  SETTING_MOD2_DECAY_SHAPE,
-  SETTING_MOD1_TIMBRE_DEPTH, 
-  SETTING_MOD2_TIMBRE_DEPTH, 
-  SETTING_MOD1_AD_RATIO,
-  SETTING_MOD2_AD_RATIO,
-  SETTING_MOD1_MODE,
-  SETTING_MOD2_MODE,
-  SETTING_MOD1_RATE,
-  SETTING_MOD2_RATE,
-  SETTING_MOD1_COLOR_DEPTH, 
-  SETTING_MOD2_COLOR_DEPTH, 
-  SETTING_MOD1_LEVEL_DEPTH, 
-  SETTING_MOD2_LEVEL_DEPTH, 
-  SETTING_MOD1_VIBRATO_DEPTH,
-  SETTING_MOD2_VIBRATO_DEPTH,
-  SETTING_MOD1_MOD2_DEPTH, 
-  SETTING_QUANT_BEFORE_VIBRATO,
-  SETTING_MOD1_SYNC,
-  SETTING_MOD2_SYNC,
-  SETTING_OSC_SYNC,
-  SETTING_METASEQ_PARAMETER_DEST, 
-  SETTING_FINE_TUNE,
-  SETTING_MOD1_MOD2_VIBRATO_DEPTH,
-  SETTING_INITIAL_GAIN,
-  SETTING_METASEQ,
-  SETTING_METASEQ_SHAPE1, 
-  SETTING_METASEQ_STEP_LENGTH1, 
-  SETTING_METASEQ_SHAPE2, 
-  SETTING_METASEQ_STEP_LENGTH2, 
-  SETTING_METASEQ_SHAPE3, 
-  SETTING_METASEQ_STEP_LENGTH3, 
-  SETTING_METASEQ_SHAPE4, 
-  SETTING_METASEQ_STEP_LENGTH4, 
-  SETTING_METASEQ_SHAPE5, 
-  SETTING_METASEQ_STEP_LENGTH5, 
-  SETTING_METASEQ_SHAPE6, 
-  SETTING_METASEQ_STEP_LENGTH6, 
-  SETTING_METASEQ_SHAPE7, 
-  SETTING_METASEQ_STEP_LENGTH7, 
-  SETTING_METASEQ_SHAPE8, 
-  SETTING_METASEQ_STEP_LENGTH8, 
-  SETTING_SAMPLE_RATE,
-  SETTING_METASEQ_DIRECTION,
-  SETTING_RESET_TYPE,
-  SETTING_PITCH_SAMPLE_HOLD,
-  SETTING_METASEQ_NOTE1, 
-  SETTING_METASEQ_NOTE2, 
-  SETTING_METASEQ_NOTE3, 
-  SETTING_METASEQ_NOTE4, 
-  SETTING_METASEQ_NOTE5, 
-  SETTING_METASEQ_NOTE6, 
-  SETTING_METASEQ_NOTE7, 
-  SETTING_METASEQ_NOTE8, 
-  SETTING_METASEQ_PARAMETER1, 
-  SETTING_METASEQ_PARAMETER2, 
-  SETTING_METASEQ_PARAMETER3, 
-  SETTING_METASEQ_PARAMETER4, 
-  SETTING_METASEQ_PARAMETER5, 
-  SETTING_METASEQ_PARAMETER6, 
-  SETTING_METASEQ_PARAMETER7, 
-  SETTING_METASEQ_PARAMETER8, 
-  SETTING_METASEQ_CLOCK_DIV, 
-  SETTING_TURING_CLOCK_DIV, 
-  SETTING_TURING_LENGTH,
-  SETTING_TURING_WINDOW,
-  SETTING_TURING_PROB,
-  SETTING_TURING_INIT,
-  SETTING_MUSICAL_SCALE,
-  SETTING_EDIT_WRAP,
-  SETTING_FILTER_MODE,
-  SETTING_FILTER_CUTOFF,
-  SETTING_FILTER_RESONANCE,
-  SETTING_FILTER_TRACKING,
-  SETTING_FILTER_ENV1,
-  SETTING_FILTER_ENV2,
-  SETTING_FILTER_CUTOFF_CONTROL,
-  SETTING_FILTER_RESONANCE_CONTROL,
-  SETTING_DISPLAY_VIEW,
-  SETTING_LAST_EDITABLE_SETTING = SETTING_DISPLAY_VIEW,
-  
-  // Not settings per se, but used for menu display!
-  SETTING_CALIBRATION,
-  SETTING_CV_TESTER,
-  SETTING_VERSION,
-  SETTING_LAST,
-};
-
 // Physical control that drives the output filter cutoff or resonance.
 enum FilterControlSource {
   FILTER_CONTROL_MENU,    // FCUT / FRES menu value only
@@ -262,110 +160,114 @@ enum DisplayView {
   DISPLAY_VIEW_NAME,    // engine name only (original behavior)
   DISPLAY_VIEW_PARAM,   // engine name + parameter popups
   DISPLAY_VIEW_SCOPE,   // scrolling output level + popups
-  DISPLAY_VIEW_DIALS,   // needles: TIMBRE, COLOR, MOD1, MOD2 + popups
+  DISPLAY_VIEW_DIALS,   // needles: TIMBRE, COLOR, CUTOFF, RESONANCE + popups
   DISPLAY_VIEW_LAST
+};
+
+// FMCV destinations.
+enum FmDestination {
+  FM_DESTINATION_FREQ,    // pitch (original Braids behavior)
+  FM_DESTINATION_META,    // engine selection
+  FM_DESTINATION_LEVEL,   // output level
+  FM_DESTINATION_PARAM_1, // advanced engine parameters
+  FM_DESTINATION_PARAM_2,
+  FM_DESTINATION_PARAM_3,
+  FM_DESTINATION_FOLD,    // output stage
+  FM_DESTINATION_DRIVE,
+  FM_DESTINATION_RING,
+  FM_DESTINATION_SUB,
+  FM_DESTINATION_JITTER,
+  FM_DESTINATION_BITS,
+  FM_DESTINATION_SAMPLE_RATE,
+  FM_DESTINATION_CRUSH,   // bits + sample rate
+  FM_DESTINATION_LAST
+};
+
+const uint8_t kNumRingRatios = 16;
+
+// Settings are byte-indexed: the byte-mapped part of this enum must stay
+// in the same order as SettingsData (checked in settings.cc).
+enum Setting {
+  SETTING_OSCILLATOR_SHAPE,
+  SETTING_RESOLUTION,
+  SETTING_SAMPLE_RATE,
+  SETTING_TRIG_SOURCE,
+  SETTING_TRIG_DELAY,
+  SETTING_META_MODULATION,
+  SETTING_PITCH_RANGE,
+  SETTING_PITCH_OCTAVE,
+  SETTING_PITCH_QUANTIZER,
+  SETTING_VCO_DRIFT,
+  SETTING_BRIGHTNESS,
+  SETTING_OSC_SYNC,
+  SETTING_FINE_TUNE,
+  SETTING_INITIAL_GAIN,
+  SETTING_RESET_TYPE,
+  SETTING_PITCH_SAMPLE_HOLD,
+  SETTING_EDIT_WRAP,
+  SETTING_FILTER_MODE,
+  SETTING_FILTER_CUTOFF,
+  SETTING_FILTER_RESONANCE,
+  SETTING_FILTER_TRACKING,
+  SETTING_FILTER_CUTOFF_CONTROL,
+  SETTING_FILTER_RESONANCE_CONTROL,
+  SETTING_PERFORMANCE_MODE,
+  SETTING_DISPLAY_VIEW,
+  SETTING_FOLD,
+  SETTING_DRIVE,
+  SETTING_RING_AMOUNT,
+  SETTING_RING_RATIO,
+  SETTING_SUB_LEVEL,
+  // Not byte-mapped: stored per engine (SettingsData::engine_params).
+  SETTING_ENGINE_PARAM_1,
+  SETTING_ENGINE_PARAM_2,
+  SETTING_ENGINE_PARAM_3,
+  SETTING_LAST_EDITABLE_SETTING = SETTING_ENGINE_PARAM_3,
+
+  // Not settings per se, but used for menu display!
+  SETTING_CALIBRATION,
+  SETTING_CV_TESTER,
+  SETTING_VERSION,
+  SETTING_LAST,
 };
 
 struct SettingsData {
   uint8_t shape;
   uint8_t resolution;
-  uint8_t rate_inversion ; 
+  uint8_t sample_rate;
   uint8_t auto_trig;
   uint8_t trig_delay;
-  uint8_t meta_modulation;
+  uint8_t meta_modulation;   // FmDestination
   uint8_t pitch_range;
   uint8_t pitch_octave;
   uint8_t pitch_quantization;
   uint8_t vco_drift;
   uint8_t brightness;
-  uint8_t mod1_attack_shape;
-  uint8_t mod2_attack_shape;
-  uint8_t mod1_decay_shape;
-  uint8_t mod2_decay_shape;
-  uint8_t mod1_timbre_depth; 
-  uint8_t mod2_timbre_depth;  
-  uint8_t mod1_ad_ratio;
-  uint8_t mod2_ad_ratio;
-  uint8_t mod1_mode;
-  uint8_t mod2_mode;
-  uint8_t mod1_rate;
-  uint8_t mod2_rate;  
-  uint8_t mod1_color_depth; 
-  uint8_t mod2_color_depth; 
-  uint8_t mod1_level_depth; 
-  uint8_t mod2_level_depth; 
-  uint8_t mod1_vibrato_depth;   
-  uint8_t mod2_vibrato_depth; 
-  uint8_t mod1_mod2_depth;   
-  uint8_t quantize_vibrato;  
-  uint8_t mod1_sync; 
-  uint8_t mod2_sync; 
-  uint8_t osc_sync; 
-  uint8_t metaseq_parameter_dest; // was mod1_mod2_timbre_depth 
-  uint8_t fine_tune; // was mod1_mod2_color_depth 
-  uint8_t mod1_mod2_vibrato_depth; 
-  uint8_t initial_gain; 
-  uint8_t metaseq;
-  uint8_t metaseq_shape1;
-  uint8_t metaseq_step_length1;
-  uint8_t metaseq_shape2;
-  uint8_t metaseq_step_length2;
-  uint8_t metaseq_shape3;
-  uint8_t metaseq_step_length3;
-  uint8_t metaseq_shape4;
-  uint8_t metaseq_step_length4;
-  uint8_t metaseq_shape5;
-  uint8_t metaseq_step_length5;
-  uint8_t metaseq_shape6;
-  uint8_t metaseq_step_length6;
-  uint8_t metaseq_shape7;
-  uint8_t metaseq_step_length7;
-  uint8_t metaseq_shape8;
-  uint8_t metaseq_step_length8;
-  uint8_t sample_rate;  
-  uint8_t metaseq_direction;
+  uint8_t osc_sync;
+  uint8_t fine_tune;         // 0..62, 31 = 0
+  uint8_t initial_gain;
   uint8_t reset_type;
   uint8_t pitch_sample_hold;
-  uint8_t metaseq_note1;
-  uint8_t metaseq_note2;
-  uint8_t metaseq_note3;
-  uint8_t metaseq_note4;
-  uint8_t metaseq_note5;
-  uint8_t metaseq_note6;
-  uint8_t metaseq_note7;
-  uint8_t metaseq_note8;
-  uint8_t metaseq_parameter1;
-  uint8_t metaseq_parameter2;
-  uint8_t metaseq_parameter3;
-  uint8_t metaseq_parameter4;
-  uint8_t metaseq_parameter5;
-  uint8_t metaseq_parameter6;
-  uint8_t metaseq_parameter7;
-  uint8_t metaseq_parameter8;
-  uint8_t metaseq_clock_div;
-  uint8_t turing_clock_div;
-  uint8_t turing_length;
-  uint8_t turing_window;
-  uint8_t turing_prob;
-  uint8_t turing_init;
-  uint8_t musical_scale;
   uint8_t edit_wrap;
-  // Output filter. Must stay in the same order as the Setting enum, since
-  // GetValue()/SetValue() index this struct by byte offset.
   uint8_t filter_mode;       // OutputFilterMode
   uint8_t filter_cutoff;     // 0..127 -> MIDI 12..139
   uint8_t filter_resonance;  // 0..127
   uint8_t filter_tracking;   // 0 = OFF, 1 = HALF, 2 = FULL
-  uint8_t filter_env1;       // 0..62, 31 = no MOD1 -> cutoff
-  uint8_t filter_env2;       // 0..62, 31 = no MOD2 -> cutoff
   uint8_t filter_cutoff_control;     // FilterControlSource
   uint8_t filter_resonance_control;  // FilterControlSource
-  uint8_t display_view;              // DisplayView
-  uint8_t extra_padding;
-  int32_t pitch_cv_offset; 
-  int32_t pitch_cv_scale; 
-  int32_t fm_cv_offset; 
+  uint8_t performance_mode;  // FINE = cutoff, FM = resonance
+  uint8_t display_view;      // DisplayView
+  uint8_t fold;              // output stage, 0 = bypass
+  uint8_t drive;
+  uint8_t ring_amount;
+  uint8_t ring_ratio;
+  uint8_t sub_level;
+  uint8_t padding[2];
+  int32_t pitch_cv_offset;
+  int32_t pitch_cv_scale;
+  int32_t fm_cv_offset;
   char magic_byte;
+  uint8_t engine_params[MACRO_OSC_SHAPE_LAST][3];
 };
 
 struct SettingMetadata {
@@ -373,7 +275,7 @@ struct SettingMetadata {
   uint8_t max_value;
   const char name[5];
   const char* const* strings;
-  
+
   int16_t Clip(int16_t value) const {
     if (value > max_value) {
       value = max_value;
@@ -398,26 +300,45 @@ class Settings {
  public:
   Settings() { }
   ~Settings() { }
-  
+
   void Init();
   void Save();
   void Reset(bool except_cal_data);
-  
+
   void SetValue(Setting setting, uint8_t value) {
+    if (setting >= SETTING_ENGINE_PARAM_1 &&
+        setting <= SETTING_ENGINE_PARAM_3) {
+      data_.engine_params[data_.shape][setting - SETTING_ENGINE_PARAM_1] =
+          value;
+      return;
+    }
     uint8_t* data = static_cast<uint8_t*>(static_cast<void*>(&data_));
     data[setting] = value;
   }
-  
+
   uint8_t GetValue(Setting setting) const {
+    if (setting >= SETTING_ENGINE_PARAM_1 &&
+        setting <= SETTING_ENGINE_PARAM_3) {
+      return data_.engine_params[data_.shape][
+          setting - SETTING_ENGINE_PARAM_1];
+    }
     const uint8_t* data = static_cast<const uint8_t*>(
         static_cast<const void*>(&data_));
     return data[setting];
   }
-  
+
+  // Name shown in the menu: the advanced parameters are named after what
+  // they do in the current engine.
+  const char* setting_name(Setting setting) const;
+
+  inline const uint8_t* engine_params(MacroOscillatorShape shape) const {
+    return data_.engine_params[shape];
+  }
+
   inline MacroOscillatorShape shape() const {
     return static_cast<MacroOscillatorShape>(data_.shape);
   }
-  
+
   inline Resolution resolution() const {
     return static_cast<Resolution>(data_.resolution);
   }
@@ -425,11 +346,7 @@ class Settings {
   inline SampleRate sample_rate() const {
     return static_cast<SampleRate>(data_.sample_rate);
   }
-  
-  inline bool rate_inversion() const {
-    return data_.rate_inversion;
-  }
-  
+
   inline PitchQuantization pitch_quantization() const {
     return static_cast<PitchQuantization>(data_.pitch_quantization);
   }
@@ -442,64 +359,16 @@ class Settings {
     return data_.trig_delay;
   }
 
-  inline uint8_t mod1_timbre_depth() const {
-    return data_.mod1_timbre_depth * 2;
-  }
-
-  inline uint8_t mod2_timbre_depth() const {
-    return data_.mod2_timbre_depth * 2;
-  }
-
-  inline uint8_t mod1_color_depth() const {
-    return data_.mod1_color_depth * 2;
-  }
-
-  inline uint8_t mod2_color_depth() const {
-    return data_.mod2_color_depth * 2;
-  }
-
-  inline uint8_t mod1_level_depth() const {
-    return data_.mod1_level_depth * 2;
-  }
-
-  inline uint8_t mod2_level_depth() const {
-    return data_.mod2_level_depth * 2;
-  }
-
-  inline bool quantize_vibrato() const {
-    return data_.quantize_vibrato;
-  }
-
   inline bool osc_sync() const {
     return data_.osc_sync;
   }
 
   inline int32_t fine_tune() const {
-    return data_.fine_tune - 64;
+    return static_cast<int32_t>(data_.fine_tune) - 31;
   }
 
-  inline bool mod1_mod2_vibrato_depth() const {
-    return data_.mod1_mod2_vibrato_depth;
-  }
-  
   inline int32_t initial_gain() const {
     return (data_.initial_gain * 516);
-  }
-
-  inline uint8_t metaseq_step_length(uint8_t i) const {
-    return GetValue(Setting(SETTING_METASEQ_STEP_LENGTH1 + i * 2));
-  }
-
-  inline int32_t metaseq_note(uint8_t i) const {
-    return int32_t(GetValue(Setting(SETTING_METASEQ_NOTE1 + i)) - 31) ;
-  }
-
-  inline MacroOscillatorShape metaseq_shape(uint8_t i) const {
-    return static_cast<MacroOscillatorShape>(GetValue(Setting(SETTING_METASEQ_SHAPE1 + i * 2)));
-  }
-
-  inline uint8_t metaseq_parameter(uint8_t i) const {
-    return GetValue(Setting(SETTING_METASEQ_PARAMETER1 + i)) * 5;
   }
 
   inline bool pitch_sample_hold() const {
@@ -509,10 +378,10 @@ class Settings {
   inline bool edit_wrap() const {
     return data_.edit_wrap;
   }
-  
+
   inline const SettingsData& data() const { return data_; }
   inline SettingsData* mutable_data() { return &data_; }
-  
+
   void Calibrate(
       int32_t adc_code_c2,
       int32_t adc_code_c4,
@@ -520,13 +389,13 @@ class Settings {
     if (adc_code_c4 != adc_code_c2) {
       int32_t scale = (24 * 128 * 4096L) / (adc_code_c4 - adc_code_c2);
       data_.pitch_cv_scale = scale;
-      data_.pitch_cv_offset = (60 << 7) - 
+      data_.pitch_cv_offset = (60 << 7) -
           (scale * ((adc_code_c2 + adc_code_c4) >> 1) >> 12);
       data_.fm_cv_offset = adc_code_fm;
     }
     Save();
   }
-  
+
   inline int32_t adc_to_pitch(int32_t pitch_adc_code) const {
     if (data_.pitch_range == PITCH_RANGE_EXTERNAL ||
         data_.pitch_range == PITCH_RANGE_LFO) {
@@ -544,13 +413,13 @@ class Settings {
     }
     return pitch_adc_code;
   }
-  
+
   inline int32_t pitch_transposition() const {
     int32_t t = data_.pitch_range == PITCH_RANGE_LFO ? -36 << 7 : 0;
     t += (static_cast<int32_t>(data_.pitch_octave) - 2) * 12 * 128;
     return t;
   }
-  
+
   inline int32_t adc_to_fm(int32_t fm_adc_code) const {
     fm_adc_code -= data_.fm_cv_offset;
     fm_adc_code = fm_adc_code * 7680 >> 12;
@@ -567,13 +436,13 @@ class Settings {
   static const Setting setting_at_index(int16_t index) {
     return settings_order_[index];
   }
-  
+
  private:
 
   SettingsData data_;
-  
+
   uint16_t version_token_;
-  
+
   static const SettingMetadata metadata_[SETTING_LAST];
   static const Setting settings_order_[SETTING_LAST];
 

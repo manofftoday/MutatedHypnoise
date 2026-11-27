@@ -31,7 +31,7 @@ oscillator_test:  $(OBJS)
 	g++ -o $(TARGET) $(OBJS)
 
 # MutatedHypnoise: output filter + engine table tests, writes .wav files.
-HYPNOISE_SRCS  = braids/test/hypnoise_test.cc 		braids/analog_oscillator.cc 		braids/digital_oscillator.cc 		braids/macro_oscillator.cc 		braids/resources.cc 		stmlib/utils/random.cc
+HYPNOISE_SRCS  = braids/test/hypnoise_test.cc 		braids/analog_oscillator.cc 		braids/digital_oscillator.cc 		braids/macro_oscillator.cc 		braids/resources.cc 		braids/engine_params.cc 		stmlib/utils/random.cc
 
 hypnoise_test:  $(HYPNOISE_SRCS) braids/output_filter.h
 	g++ -DTEST -O2 -g -Wall -Werror -Wno-unused-variable -Wno-unused-but-set-variable -I. $(HYPNOISE_SRCS) -o hypnoise_test

@@ -318,6 +318,15 @@ void AnalogOscillator::RenderSine(
   phase_ = phase;
 }
 
+// Offset before the wavefolder (aux parameter, MutatedHypnoise BIAS):
+// asymmetric folding, i.e. even harmonics. 0 = original.
+static inline int16_t FoldBias(int32_t x, int16_t bias) {
+  x += bias;
+  if (x > 32767) x = 32767;
+  if (x < -32768) x = -32768;
+  return x;
+}
+
 void AnalogOscillator::RenderTriangleFold(
     const uint8_t* sync_in,
     int16_t* buffer,
@@ -344,7 +353,7 @@ void AnalogOscillator::RenderTriangleFold(
     phase_16 = phase >> 16;
     triangle = (phase_16 << 1) ^ (phase_16 & 0x8000 ? 0xffff : 0x0000);
     triangle += 32768;
-    triangle = triangle * gain >> 15;
+    triangle = FoldBias(triangle * gain >> 15, aux_parameter_);
     triangle = Interpolate88(ws_tri_fold, triangle + 32768);
     *buffer = triangle >> 1;
     
@@ -352,7 +361,7 @@ void AnalogOscillator::RenderTriangleFold(
     phase_16 = phase >> 16;
     triangle = (phase_16 << 1) ^ (phase_16 & 0x8000 ? 0xffff : 0x0000);
     triangle += 32768;
-    triangle = triangle * gain >> 15;
+    triangle = FoldBias(triangle * gain >> 15, aux_parameter_);
     triangle = Interpolate88(ws_tri_fold, triangle + 32768);
     *buffer++ += triangle >> 1;
   }
@@ -385,13 +394,13 @@ void AnalogOscillator::RenderSineFold(
     // 2x oversampled WF.
     phase += increment;
     sine = Interpolate824(wav_sine, phase);
-    sine = sine * gain >> 15;
+    sine = FoldBias(sine * gain >> 15, aux_parameter_);
     sine = Interpolate88(ws_sine_fold, sine + 32768);
     *buffer = sine >> 1;
     
     phase += increment;
     sine = Interpolate824(wav_sine, phase);
-    sine = sine * gain >> 15;
+    sine = FoldBias(sine * gain >> 15, aux_parameter_);
     sine = Interpolate88(ws_sine_fold, sine + 32768);
     *buffer++ += sine >> 1;
   }

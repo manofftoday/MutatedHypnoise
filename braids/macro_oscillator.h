@@ -55,6 +55,7 @@ class MacroOscillator {
     analog_oscillator_[0].Init();
     analog_oscillator_[1].Init();
     digital_oscillator_.Init();
+    drift_[0] = drift_[1] = drift_[2] = 0;
   }
   
   inline void set_shape(MacroOscillatorShape shape) {
@@ -77,6 +78,13 @@ class MacroOscillator {
     parameter_[1] = parameter_2;
   }
   
+  // Advanced engine parameters (see engine_params.cc), 0..127 each.
+  inline void set_extras(const uint8_t* extras) {
+    extra_[0] = extras[0];
+    extra_[1] = extras[1];
+    extra_[2] = extras[2];
+  }
+
   inline void Strike() {
     digital_oscillator_.Strike();
   }
@@ -104,6 +112,8 @@ class MacroOscillator {
   int16_t temp_buffer_[25];
   int32_t lp_state_;
   int16_t previous_sample_;
+  uint8_t extra_[3];
+  int32_t drift_[3];  // TRIPLE_* DRFT random walks
   
   AnalogOscillator analog_oscillator_[3];
   DigitalOscillator digital_oscillator_;

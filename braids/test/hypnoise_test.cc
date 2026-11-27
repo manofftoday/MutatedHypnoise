@@ -21,8 +21,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "braids/engine_params.h"
 #include "braids/macro_oscillator.h"
 #include "braids/output_filter.h"
+#include "stmlib/utils/random.h"
 
 using namespace braids;
 
@@ -189,6 +191,7 @@ static void TestAllEngines() {
       memset(sync, 0, sizeof(sync));
       if (b % 400 == 0) osc.Strike();
       osc.set_parameters(16384, 16384);
+      osc.set_extras(kEngineParamDefaults[shape]);
       osc.set_pitch(48 << 7);
       osc.Render(sync, buffer, kBlockSize);
       for (size_t i = 0; i < kBlockSize; ++i) {
@@ -237,6 +240,7 @@ static void TestNewEngines() {
             memset(sync, 0, sizeof(sync));
             if (b % 500 == 0) osc.Strike();
             osc.set_parameters(kValues[t], kValues[c]);
+            osc.set_extras(kEngineParamDefaults[kNewEngines[e]]);
             osc.set_pitch(kPitches[p]);
             osc.Render(sync, buffer, kBlockSize);
             if (b < 100) continue;  // let smoothing / DC trackers settle
@@ -267,6 +271,73 @@ static void TestNewEngines() {
   }
 }
 
+// Renders one engine (fixed seed) and returns its output; used to check
+// that each advanced parameter does something and never kills the sound.
+static void RenderEngine(MacroOscillatorShape shape, const uint8_t* extras,
+                         int16_t pitch, int16_t* out, size_t num_blocks) {
+  static MacroOscillator osc;
+  stmlib::Random::Seed(4321);
+  osc.Init();
+  osc.set_shape(shape);
+  for (size_t b = 0; b < num_blocks; ++b) {
+    uint8_t sync[kBlockSize];
+    memset(sync, 0, sizeof(sync));
+    if (b % 250 == 0) osc.Strike();
+    osc.set_parameters(12000, 20000);
+    osc.set_extras(extras);
+    osc.set_pitch(pitch);
+    osc.Render(sync, out + b * kBlockSize, kBlockSize);
+  }
+}
+
+static void TestAdvancedParameters() {
+  printf("\n-- Advanced parameters: extremes change the sound, never mute --\n");
+  const size_t kBlocks = 1000;
+  static int16_t reference[kBlocks * kBlockSize];
+  static int16_t modified[kBlocks * kBlockSize];
+  int tested = 0, ineffective = 0, muted = 0;
+  for (int shape = 0; shape < MACRO_OSC_SHAPE_SILENCE; ++shape) {
+    for (int p = 0; p < kNumEngineParams; ++p) {
+      bool effective = false;
+      for (int pitch_index = 0; pitch_index < 3; ++pitch_index) {
+        const int16_t kPitches[] = { 40 << 7, 72 << 7, 96 << 7 };
+        int16_t pitch = kPitches[pitch_index];
+        RenderEngine(static_cast<MacroOscillatorShape>(shape),
+                     kEngineParamDefaults[shape], pitch, reference, kBlocks);
+        const uint8_t extremes[] = { 0, 127 };
+        for (int x = 0; x < 2; ++x) {
+          uint8_t extras[3];
+          memcpy(extras, kEngineParamDefaults[shape], 3);
+          extras[p] = extremes[x];
+          RenderEngine(static_cast<MacroOscillatorShape>(shape), extras,
+                       pitch, modified, kBlocks);
+          double energy = 0.0;
+          for (size_t i = 0; i < kBlocks * kBlockSize; ++i) {
+            if (modified[i] != reference[i]) effective = true;
+            energy += double(modified[i]) * modified[i];
+          }
+          double rms = sqrt(energy / (kBlocks * kBlockSize));
+          if (rms < 30.0) {
+            ++muted;
+            printf("  quiet: shape %d %s=%d pitch %d rms %.1f\n", shape,
+                   kEngineParamNames[shape][p], extremes[x], pitch >> 7, rms);
+          }
+        }
+      }
+      ++tested;
+      if (!effective) {
+        ++ineffective;
+        printf("  no effect: shape %d %s\n", shape,
+               kEngineParamNames[shape][p]);
+      }
+    }
+  }
+  char label[64];
+  snprintf(label, sizeof(label), "%d parameters: all change the sound", tested);
+  Check(ineffective == 0, label, ineffective);
+  Check(muted == 0, "no parameter extreme mutes an engine", muted);
+}
+
 static void RenderListeningFiles() {
   static MacroOscillator osc;
   OutputFilter f;
@@ -291,6 +362,7 @@ static void RenderListeningFiles() {
       uint8_t sync[kBlockSize];
       memset(sync, 0, sizeof(sync));
       osc.set_parameters(timbre, color);
+      osc.set_extras(kEngineParamDefaults[kNewEngines[e]]);
       osc.set_pitch(36 << 7);
       osc.Render(sync, buffer, kBlockSize);
       fwrite(buffer, sizeof(int16_t), kBlockSize, fp);
@@ -318,6 +390,7 @@ static void RenderListeningFiles() {
       uint8_t sync[kBlockSize];
       memset(sync, 0, sizeof(sync));
       osc.set_parameters(8000, 16384);
+      osc.set_extras(kEngineParamDefaults[MACRO_OSC_SHAPE_CSAW]);
       osc.set_pitch(36 << 7);
       osc.Render(sync, buffer, kBlockSize);
       for (size_t i = 0; i < kBlockSize; ++i) buffer[i] = f.Process(buffer[i]);
@@ -345,6 +418,7 @@ static void RenderListeningFiles() {
     uint8_t sync[kBlockSize];
     memset(sync, 0, sizeof(sync));
     osc.set_parameters(20000, 12000);
+    osc.set_extras(kEngineParamDefaults[MACRO_OSC_SHAPE_SAW_SWARM]);
     osc.set_pitch(43 << 7);
     osc.Render(sync, buffer, kBlockSize);
     for (size_t i = 0; i < kBlockSize; ++i) buffer[i] = f.Process(buffer[i]);
@@ -359,6 +433,7 @@ int main(void) {
   TestFilterStability();
   TestAllEngines();
   TestNewEngines();
+  TestAdvancedParameters();
   RenderListeningFiles();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED",
          failures, failures == 1 ? "" : "s");
