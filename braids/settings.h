@@ -163,7 +163,8 @@ enum DisplayView {
   DISPLAY_VIEW_SCOPE,   // scrolling output level + popups
   DISPLAY_VIEW_DIALS,   // needles: TIMBRE, COLOR, CUTOFF, RESONANCE + popups
   DISPLAY_VIEW_TOUR,    // screensaver touring the live parameters + popups
-  DISPLAY_VIEW_LAST
+  DISPLAY_VIEW_FRACTAL, // screensaver: psychedelic fractal plasma + popups
+DISPLAY_VIEW_LAST
 };
 
 // FMCV destinations.

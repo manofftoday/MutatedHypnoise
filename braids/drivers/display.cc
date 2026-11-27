@@ -64,6 +64,7 @@ void Display::Init() {
   brightness_pwm_cycle_ = 0;
   brightness_ = 3;
   memset(buffer_, ' ', kDisplayWidth);
+  raw_ = false;
 }
 
 void Display::Refresh() {
@@ -71,7 +72,9 @@ void Display::Refresh() {
     GPIOB->BRR = kCharacterEnablePins[active_position_];
     active_position_ = (active_position_ + 1) % kDisplayWidth;
     char_index_ = static_cast<uint8_t>(buffer_[active_position_]);
-    if (char_index_ < 33 || char_index_ > 162) {
+    if (raw_) {
+       Shift14SegmentsWord(segments_[active_position_]);
+    } else if (char_index_ < 33 || char_index_ > 162) {
        Shift14SegmentsWord(0);
     } else {
        Shift14SegmentsWord(chr_characters[char_index_ - 33]);
@@ -85,6 +88,12 @@ void Display::Refresh() {
 
 void Display::Print(const char* s) {
   strncpy(buffer_, s, kDisplayWidth);
+  raw_ = false;
+}
+
+void Display::PrintSegments(const uint16_t* segments) {
+  memcpy(segments_, segments, sizeof(segments_));
+  raw_ = true;
 }
 
 void Display::Shift14SegmentsWord(uint16_t data) {

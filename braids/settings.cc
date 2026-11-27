@@ -470,7 +470,8 @@ const char* const filter_tracking_values[] = { "OFF", "HALF", "FULL" };
 
 const char* const filter_control_values[] = { "MENU", "FM", "TIMB", "COLR" };
 
-const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL", "TOUR" };
+const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL", "TOUR",
+                                              "FRAC" };
 
 const char* const reset_type_values[] = {
     "NO", // 0

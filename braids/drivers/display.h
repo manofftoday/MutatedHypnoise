@@ -45,7 +45,9 @@ class Display {
   void Init();
   void Refresh();
   void Print(const char* s);
-  
+  // Raw segment words (one 14-segment bitmask per digit) instead of text.
+  void PrintSegments(const uint16_t* segments);
+
   char* mutable_buffer() { return buffer_; }
   void set_brightness(uint16_t brightness) { brightness_ = brightness; }
  
@@ -53,6 +55,8 @@ class Display {
   void Shift14SegmentsWord(uint16_t data);
 
   char buffer_[kDisplayWidth];
+  uint16_t segments_[kDisplayWidth];
+  bool raw_;
   uint8_t char_index_;
   uint16_t active_position_;
   uint16_t brightness_pwm_cycle_;

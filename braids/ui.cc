@@ -31,6 +31,7 @@
 // User interface.
 
 #include "braids/ui.h"
+#include "braids/resources.h"
 
 #include <cstring>
 
@@ -175,6 +176,13 @@ bool Ui::RenderMainView(char* text, uint32_t now) {
     }
     popup_feedback_ = -1;
   }
+  if (view == DISPLAY_VIEW_FRACTAL) {
+    if (now - encoder_time_ < kTourDelay) {
+      return false;
+    }
+    fractal_frame_ = true;
+    return true;
+  }
   if (view == DISPLAY_VIEW_TOUR) {
     uint32_t idle = now - encoder_time_;
     if (idle < kTourDelay) {
@@ -195,6 +203,55 @@ bool Ui::RenderMainView(char* text, uint32_t now) {
     text[3] = DialGlyph(feedback_[FEEDBACK_RESONANCE]);
   }
   return true;
+}
+
+// FRAC screensaver: a fractal plasma drawn on the 56 segments themselves.
+// Each segment has a position (half units: x 0..4 per digit, digits 6
+// apart, y 0..8). Its value is a sum of travelling sine waves at three
+// octaves (1, 1/2, 1/4 amplitude: fBm-like, self-similar) plus rings
+// spreading from a wandering centre; the right half mirrors the left
+// (kaleidoscope). A segment is lit when the value crosses a threshold
+// that falls as the output gets louder. TIMBRE sets the speed, COLOR the
+// zoom.
+static const uint16_t kSegmentBit[14] = {
+  0x8000, 0x4000, 0x2000, 0x1000, 0x0800, 0x0400, 0x0200,  // a b c d e f g
+  0x0100, 0x0080, 0x0040, 0x0020, 0x0010, 0x0008, 0x0004   // h j k l m n p
+};
+static const uint8_t kSegmentX[14] = { 2, 4, 4, 2, 0, 0, 1, 2, 3, 3, 3, 2, 1, 1 };
+static const uint8_t kSegmentY[14] = { 0, 2, 6, 8, 6, 2, 2, 2, 2, 4, 6, 6, 6, 4 };
+
+void Ui::RenderFractal(uint16_t* segments) {
+  uint8_t t = fractal_time_ >> 2;
+  uint8_t zoom = 6 + (feedback_[FEEDBACK_COLOR] >> 3);  // 6..21 per unit
+  // Wandering centre of the rings (Lissajous, two incommensurate rates).
+  int32_t cx = 11 + (wav_sine[static_cast<uint8_t>(fractal_time_ >> 3)] >> 12);
+  int32_t cy = 4 + (wav_sine[static_cast<uint8_t>(
+      (fractal_time_ * 3) >> 4)] >> 13);
+  // Threshold: 8 levels of output loudness open more segments.
+  int32_t threshold = 24000 - (fractal_level_ * 3000 >> 8);
+  for (uint8_t digit = 0; digit < kDisplayWidth; ++digit) {
+    uint16_t word = 0;
+    for (uint8_t s = 0; s < 14; ++s) {
+      int32_t x = digit * 6 + kSegmentX[s];  // 0..22
+      int32_t y = kSegmentY[s];
+      if (x > 11) x = 22 - x;  // kaleidoscope: mirror around the centre
+      int32_t value = 0;
+      for (uint8_t o = 0; o < 3; ++o) {
+        uint8_t scale = zoom << o;
+        uint8_t along = x * scale + t * (o + 1);
+        uint8_t across = y * scale + (x * scale >> 1) - t * (3 - o);
+        value += (wav_sine[along] + wav_sine[across]) >> (o + 1);
+      }
+      int32_t dx = x - cx;
+      int32_t dy = y - cy;
+      uint8_t ring = (dx * dx + dy * dy) * 3 - (t << 1);
+      value += wav_sine[ring] >> 1;
+      if (value > threshold) {
+        word |= kSegmentBit[s];
+      }
+    }
+    segments[digit] = word;
+  }
 }
 
 // Screensaver: engine, TIMBRE, COLOR, the engine's advanced parameters,
@@ -307,8 +364,15 @@ void Ui::RefreshDisplay() {
         if (setting_ == SETTING_OSCILLATOR_SHAPE) {
           char text[kDisplayWidth + 1];
           text[kDisplayWidth] = '\0';
+          fractal_frame_ = false;
           if (RenderMainView(text, system_clock.milliseconds())) {
-            display_.Print(text);
+            if (fractal_frame_) {
+              uint16_t segments[kDisplayWidth];
+              RenderFractal(segments);
+              display_.PrintSegments(segments);
+            } else {
+              display_.Print(text);
+            }
             break;
           }
         }
@@ -574,6 +638,14 @@ void Ui::DoEvents() {
     memmove(scope_, scope_ + 1, kDisplayWidth - 1);
     scope_[kDisplayWidth - 1] = level
         ? static_cast<char>(kGlyphMeter + level - 1) : ' ';
+    // FRAC: fast attack, slow release on the level; speed from TIMBRE.
+    int32_t target = level << 8;
+    if (target > fractal_level_) {
+      fractal_level_ += (target - fractal_level_) >> 1;
+    } else {
+      fractal_level_ -= (fractal_level_ - target) >> 4;
+    }
+    fractal_time_ += 1 + (feedback_[FEEDBACK_TIMBRE] >> 4);
     level_peak_ = 0;
     refresh_display_ = true;
   }

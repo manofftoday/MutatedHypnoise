@@ -150,6 +150,7 @@ class Ui {
   void DetectControlMovement(uint32_t now);
   bool RenderMainView(char* text, uint32_t now);
   void RenderTour(char* text, uint32_t elapsed);
+  void RenderFractal(uint16_t* segments);
 
   stmlib::EventQueue<16> queue_;
   
@@ -179,6 +180,9 @@ class Ui {
 
   uint8_t feedback_[FEEDBACK_LAST];  // 0..127
   uint16_t level_peak_;
+  uint16_t fractal_time_;    // FRAC animation clock
+  uint16_t fractal_level_;   // smoothed output level, Q8 (0..8 << 8)
+  bool fractal_frame_;       // RenderMainView chose the fractal
   uint8_t cpu_peak_;
   uint8_t cpu_oscillator_peak_;
   uint32_t cpu_sum_;
