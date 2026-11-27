@@ -48,8 +48,9 @@ include stmlib/makefile.inc
 # (needed with recent arm-none-eabi toolchains). See the file for details.
 LINKER_SCRIPT = braids/stm32f10x_flash_md_hypnoise.ld
 
-# Rule for building the firmware update file
+# Rule for building the firmware update file (audio bootloader, QPSK
+# 48 kHz / 6 kHz carrier / 12000 bps / 256-byte packets). Python 3 port of
+# stm_audio_bootloader/qpsk/encoder.py, which only runs on Python 2.
+PYTHON ?= python
 wav:  $(TARGET_BIN)
-	python stm_audio_bootloader/qpsk/encoder.py \
-		-s 48000 -b 12000 -c 6000 -p 256 \
-		$(TARGET_BIN)
+	$(PYTHON) braids/make_update_wav.py $(TARGET_BIN) $(BUILD_DIR)hypnoise.wav
