@@ -124,12 +124,8 @@ class OutputFilter {
 
     int32_t x = static_cast<int32_t>(in) * input_gain_ >> 7;  // << 8 * Q15
     int32_t v3 = x - ic2_;
-    int32_t v1 = static_cast<int32_t>(
-        (static_cast<int64_t>(a1_) * ic1_ +
-         static_cast<int64_t>(a2_) * v3) >> 30);
-    int32_t v2 = ic2_ + static_cast<int32_t>(
-        (static_cast<int64_t>(a2_) * ic1_ +
-         static_cast<int64_t>(a3_) * v3) >> 30);
+    int32_t v1 = MulAdd30(a1_, ic1_, a2_, v3);
+    int32_t v2 = ic2_ + MulAdd30(a2_, ic1_, a3_, v3);
     ic1_ = ClampState(2 * v1 - ic1_);
     ic2_ = ClampState(2 * v2 - ic2_);
 
@@ -148,7 +144,68 @@ class OutputFilter {
     return static_cast<int16_t>(y);
   }
 
+  // Processes a block in place. Same result as Process() on each sample,
+  // but in steady state (no mode change / crossfade) it runs a tight loop
+  // per mode, with the state and coefficients kept in registers.
+  void Process(int16_t* buffer, size_t size) {
+    if (mode_ == target_mode_ && (mode_ == OUTPUT_FILTER_OFF ||
+                                  wet_ == kUnity)) {
+      switch (mode_) {
+        case OUTPUT_FILTER_LP: ProcessBlock<OUTPUT_FILTER_LP>(buffer, size);
+          break;
+        case OUTPUT_FILTER_HP: ProcessBlock<OUTPUT_FILTER_HP>(buffer, size);
+          break;
+        case OUTPUT_FILTER_BP: ProcessBlock<OUTPUT_FILTER_BP>(buffer, size);
+          break;
+        default:
+          break;
+      }
+    } else {
+      while (size--) {
+        *buffer = Process(*buffer);
+        ++buffer;
+      }
+    }
+  }
+
  private:
+  template<OutputFilterMode mode>
+  void ProcessBlock(int16_t* buffer, size_t size) {
+    int32_t ic1 = ic1_;
+    int32_t ic2 = ic2_;
+    const int32_t a1 = a1_;
+    const int32_t a2 = a2_;
+    const int32_t a3 = a3_;
+    const int32_t gain = input_gain_;
+    const int32_t k = mode == OUTPUT_FILTER_BP ? k_bp_ : k_;
+    while (size--) {
+      int32_t x = static_cast<int32_t>(*buffer) * gain >> 7;
+      int32_t v3 = x - ic2;
+      int32_t v1 = MulAdd30(a1, ic1, a2, v3);
+      int32_t v2 = ic2 + MulAdd30(a2, ic1, a3, v3);
+      ic1 = ClampState(2 * v1 - ic1);
+      ic2 = ClampState(2 * v2 - ic2);
+      int32_t y;
+      if (mode == OUTPUT_FILTER_LP) {
+        y = v2;
+      } else if (mode == OUTPUT_FILTER_HP) {
+        y = x - MulQ28(k, v1) - v2;
+      } else {
+        y = MulQ28(k, v1);
+      }
+      *buffer++ = SoftLimit(y >> 8);
+    }
+    ic1_ = ic1;
+    ic2_ = ic2;
+  }
+
+  // (a * b + c * d) >> 30 with 32 x 32 -> 64 multiplies (SMULL + SMLAL).
+  static inline int32_t MulAdd30(int32_t a, int32_t b, int32_t c, int32_t d) {
+    int64_t acc = static_cast<int64_t>(a) * static_cast<int64_t>(b);
+    acc += static_cast<int64_t>(c) * static_cast<int64_t>(d);
+    return static_cast<int32_t>(acc >> 30);
+  }
+
   static const int32_t kUnity = 32768;
   static const int32_t kFadeStep = 171;           // 32768 / 192 = 2 ms @ 96k
   static const int32_t kOneQ28 = 1 << 28;
@@ -156,34 +213,43 @@ class OutputFilter {
   static const int32_t kMinDamping = 8947849;     // 1/30 in Q28, Q = 30
   static const int32_t kMinBpGain = 1 << 26;      // 0.25 in Q28
   static const int32_t kStateLimit = 1 << 28;     // 32x full scale (<< 8)
+  static const int32_t kSoftThreshold = 16384;
 
   static inline int32_t MulQ28(int32_t a, int32_t b) {
     return static_cast<int32_t>(static_cast<int64_t>(a) * b >> 28);
   }
 
+  // Saturates to [-2^28, 2^28 - 1]: a single SSAT on the Cortex-M3.
   static inline int32_t ClampState(int32_t x) {
-    if (x > kStateLimit) return kStateLimit;
+#ifdef __arm__
+    int32_t result;
+    asm("ssat %0, %1, %2" : "=r" (result) : "I" (29), "r" (x));
+    return result;
+#else
+    if (x > kStateLimit - 1) return kStateLimit - 1;
     if (x < -kStateLimit) return -kStateLimit;
     return x;
+#endif
   }
 
   // Linear up to |x| = 16384, then a quadratic knee that reaches 32767
   // with zero slope at |x| = 49152; hard clip beyond.
   static inline int32_t SoftLimit(int32_t x) {
-    const int32_t kThreshold = 16384;
-    const int32_t kKnee = 32768;
-    int32_t sign = x < 0 ? -1 : 1;
-    int32_t a = x * sign;
-    if (a > kThreshold) {
-      int32_t e = a - kThreshold;
-      if (e >= kKnee) {
-        a = 32767;
-      } else {
-        a = kThreshold + e - ((e * e) >> 16);
-        if (a > 32767) a = 32767;
-      }
+    if (x > kSoftThreshold) {
+      return Knee(x);
+    } else if (x < -kSoftThreshold) {
+      return -Knee(-x);
     }
-    return a * sign;
+    return x;
+  }
+
+  static inline int32_t Knee(int32_t a) {
+    int32_t e = a - kSoftThreshold;
+    if (e >= 32768) {
+      return 32767;
+    }
+    a = kSoftThreshold + e - ((e * e) >> 16);
+    return a > 32767 ? 32767 : a;
   }
 
   void ComputeCoefficients() {

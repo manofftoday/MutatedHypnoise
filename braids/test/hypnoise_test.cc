@@ -178,6 +178,38 @@ static void TestFilterStability() {
   Check(max_step < 200, "mode change crossfade: max sample step", max_step);
 }
 
+// The block version of OutputFilter::Process (fast path used by the
+// firmware) must match the per-sample version exactly, across mode
+// changes, crossfades and cutoff/resonance jumps.
+static void TestFilterBlockEquivalence() {
+  printf("\n-- Filter: block processing == per-sample processing --\n");
+  OutputFilter a, b;
+  a.Init();
+  b.Init();
+  srand(7);
+  int mismatches = 0;
+  for (int block = 0; block < 20000; ++block) {
+    OutputFilterMode mode = static_cast<OutputFilterMode>((block / 700) % 4);
+    int32_t cutoff = (12 << 7) + rand() % (128 << 7);
+    int32_t resonance = (block / 1500) % 2 ? 32767 : rand() % 32768;
+    a.Configure(mode, cutoff, resonance);
+    b.Configure(mode, cutoff, resonance);
+    int16_t x[kBlockSize], y[kBlockSize];
+    for (size_t i = 0; i < kBlockSize; ++i) {
+      x[i] = y[i] = static_cast<int16_t>((rand() % 65536) - 32768);
+    }
+    for (size_t i = 0; i < kBlockSize; ++i) {
+      x[i] = a.Process(x[i]);
+    }
+    b.Process(y, kBlockSize);
+    for (size_t i = 0; i < kBlockSize; ++i) {
+      if (x[i] != y[i]) ++mismatches;
+    }
+  }
+  Check(mismatches == 0, "block == per-sample (mismatching samples)",
+        mismatches);
+}
+
 static void TestAllEngines() {
   printf("\n-- Every engine renders --\n");
   for (int shape = 0; shape < MACRO_OSC_SHAPE_LAST; ++shape) {
@@ -431,6 +463,7 @@ static void RenderListeningFiles() {
 int main(void) {
   TestFilterResponse();
   TestFilterStability();
+  TestFilterBlockEquivalence();
   TestAllEngines();
   TestNewEngines();
   TestAdvancedParameters();

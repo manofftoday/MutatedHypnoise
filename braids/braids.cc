@@ -534,18 +534,28 @@ void RenderBlock() {
   }
   bool filter_active = output_filter.active();
 
-  // Copy to DAC buffer with sample rate and bit reduction applied,
-  // then the output filter (smooths the bit-crush/decimation staircase).
-  int16_t sample = 0;
-  int32_t peak = 0;
+  // Sample rate and bit reduction, then the output filter (smooths the
+  // bit-crush/decimation staircase), then the output level.
   size_t decimation_factor = decimation_factors[sample_rate_value];
   uint16_t bit_mask = bit_reduction_masks[bits_value];
-  for (size_t i = 0; i < kBlockSize; ++i) {
-    if ((i % decimation_factor) == 0) {
-       sample = render_buffer[i] & bit_mask;
+  if (decimation_factor != 1 || bit_mask != 0xffff) {
+    int16_t sample = 0;
+    size_t hold = 0;
+    for (size_t i = 0; i < kBlockSize; ++i) {
+      if (hold == 0) {
+        sample = render_buffer[i] & bit_mask;
+        hold = decimation_factor;
+      }
+      --hold;
+      render_buffer[i] = sample;
     }
-    int16_t filtered = filter_active ? output_filter.Process(sample) : sample;
-    int32_t out = static_cast<int32_t>(filtered) * gain >> 16;
+  }
+  if (filter_active) {
+    output_filter.Process(render_buffer, kBlockSize);
+  }
+  int32_t peak = 0;
+  for (size_t i = 0; i < kBlockSize; ++i) {
+    int32_t out = static_cast<int32_t>(render_buffer[i]) * gain >> 16;
     render_buffer[i] = out;
     if (out < 0) out = -out;
     if (out > peak) peak = out;
