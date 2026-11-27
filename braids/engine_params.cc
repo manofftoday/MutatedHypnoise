@@ -66,6 +66,9 @@ const char kEngineParamNames[MACRO_OSC_SHAPE_LAST][kNumEngineParams][5] = {
   { "RATE", "DPTH", "BRST" },  // FOLD_DRONE
   { "SHIM", "SRAT", "WIDT" },  // SPECTRAL_DRONE
   { "TUNE", "DCAY", "DTUN" },  // TANPURA
+  { "BEAT", "DCAY", "SIZE" },  // SINGING_BOWL
+  { "VOWL", "GLID", "BRTH" },  // OVERTONE_CHANT
+  { "BLOM", "DCAY", "FDBK" },  // GONG
   { "----", "----", "----" },  // SILENCE
 };
 
@@ -105,6 +108,9 @@ const uint8_t kEngineParamDefaults[MACRO_OSC_SHAPE_LAST][kNumEngineParams] = {
   { 64, 0, 64 },     // FOLD_DRONE: no breathing LFO by default
   { 0, 64, 64 },     // SPECTRAL_DRONE: no shimmer by default
   { 0, 64, 16 },     // TANPURA: Pa, ~2.7 s decay, Sa detune
+  { 32, 96, 64 },    // SINGING_BOWL: slow beating, long decay
+  { 48, 64, 8 },     // OVERTONE_CHANT: "mmm", medium glide, a little breath
+  { 64, 96, 0 },     // GONG: medium bloom, long decay, no feedback
   { 0, 0, 0 },       // SILENCE
 };
 

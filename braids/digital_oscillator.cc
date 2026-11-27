@@ -2306,6 +2306,9 @@ void DigitalOscillator::RenderSpectralDrone(
 //   TRIG:   plucks the next string at once. DCAY: string decay time.
 static const int16_t kTanpuraFirstString[4] = { -640, -896, -128, 0 };
 
+// Largest block rendered at once (braids.cc renders 24 samples).
+static const uint8_t kMaxBlockSize = 32;
+
 // Sawtooth with a polyBLEP correction around the reset.
 static inline int32_t BlepSaw(uint32_t phase, uint32_t increment) {
   int32_t saw = static_cast<int32_t>(phase >> 16) - 32768;
@@ -2333,12 +2336,20 @@ void DigitalOscillator::RenderTanpura(
     for (uint8_t k = 0; k < 4; ++k) {
       t.attack[k] = 1;
       t.phase[k] = Random::GetWord();
+      t.level[k] = 0;
+      t.fold[k] = 4096 << 8;
     }
     init_ = false;
     strike_ = false;
   }
   int32_t rate = parameter_[0];
-  int32_t jawari = parameter_[1];
+
+  // Jawari depth shrinks above C3: fewer folds, so the bridge buzz stays
+  // below Nyquist instead of aliasing into a harsh hash.
+  int32_t jawari_scale = 32767 - ((pitch_ - (48 << 7)) << 2);
+  if (jawari_scale > 32767) jawari_scale = 32767;
+  if (jawari_scale < 8192) jawari_scale = 8192;
+  int32_t jawari = parameter_[1] * jawari_scale >> 15;
 
   uint32_t cycle_increment = 536870 + rate * 118;
   t.cycle_phase += cycle_increment;
@@ -2351,13 +2362,19 @@ void DigitalOscillator::RenderTanpura(
     t.next_string = (t.next_string + 1) & 3;
   }
 
+  // Organic detune: one random draw per block moves one string's target.
+  uint32_t random = Random::GetWord();
+  if ((random & 0xff) < 16) {
+    t.drift_target[(random >> 8) & 3] = static_cast<int16_t>(random >> 16);
+  }
+
   int32_t offset[4] = {
     kTanpuraFirstString[extra_[0] >> 5], 0, extra_[2] >> 2, -1536
   };
   int32_t decay = 1 + ((127 - extra_[1]) * 12 >> 7);
   uint32_t increment[4];
   int32_t level[4];
-  int32_t fold_gain[4];
+  int32_t fold[4];
   int32_t total = 0;
   for (uint8_t k = 0; k < 4; ++k) {
     int32_t* envelope = &t.envelope[k];
@@ -2370,10 +2387,6 @@ void DigitalOscillator::RenderTanpura(
       *envelope -= (*envelope >> 16) * decay;
     }
     int32_t envelope_level = *envelope >> 8;
-    // Organic detune: slow random walk, up to ~12 cents with TIMBRE.
-    if ((Random::GetWord() >> 16) <= 64) {
-      t.drift_target[k] = Random::GetSample();
-    }
     t.drift[k] += ((static_cast<int32_t>(t.drift_target[k]) << 8) -
                    t.drift[k]) >> 11;
     int32_t detune = (t.drift[k] >> 8) * (rate >> 11) >> 15;
@@ -2382,25 +2395,265 @@ void DigitalOscillator::RenderTanpura(
     increment[k] = ComputePhaseIncrement(pitch);
     level[k] = envelope_level * 24576 >> 15;
     total += level[k];
-    // Jawari: fold depth 1x .. 8x, following the envelope.
-    fold_gain[k] = 4096 + ((jawari * envelope_level >> 15) * 7 >> 3);
+    // Jawari: fold depth 1x .. 4x, following the envelope.
+    fold[k] = 4096 + ((jawari * envelope_level >> 15) * 3 >> 3);
   }
   total >>= 1;
   int32_t gain = total > 26000 ? (26000 << 15) / total : 32768;
 
-  while (size--) {
-    int32_t sum = 0;
-    for (uint8_t k = 0; k < 4; ++k) {
-      t.phase[k] += increment[k];
-      int32_t x = BlepSaw(t.phase[k], increment[k]);
-      CLIP(x)
-      uint32_t fold_phase = static_cast<uint32_t>(x * fold_gain[k]) << 3;
+  // Levels and fold depths glide across the block (no zipper clicks on the
+  // plucks or when the gain normalization moves).
+  int32_t level_step[4];
+  int32_t fold_step[4];
+  for (uint8_t k = 0; k < 4; ++k) {
+    level_step[k] = (((level[k] * gain >> 15) << 8) - t.level[k]) / size;
+    fold_step[k] = ((fold[k] << 8) - t.fold[k]) / size;
+  }
+
+  // One string at a time over the whole block: its state stays in
+  // registers (about half the cycles of interleaving the four strings).
+  int32_t mix[kMaxBlockSize];
+  for (uint8_t i = 0; i < size; ++i) {
+    mix[i] = 0;
+  }
+  for (uint8_t k = 0; k < 4; ++k) {
+    uint32_t phase = t.phase[k];
+    uint32_t phase_increment = increment[k];
+    int32_t string_level = t.level[k];
+    int32_t string_fold = t.fold[k];
+    int32_t step = level_step[k];
+    int32_t fold_increment = fold_step[k];
+    for (uint8_t i = 0; i < size; ++i) {
+      string_level += step;
+      string_fold += fold_increment;
+      phase += phase_increment;
+      int32_t x = BlepSaw(phase, phase_increment);
+      uint32_t fold_phase =
+          static_cast<uint32_t>(x * (string_fold >> 8)) << 3;
       int32_t y = Interpolate824(wav_sine, fold_phase + kSinePhaseOffset);
-      sum += y * level[k] >> 16;  // >> 1: four strings
+      mix[i] += y * (string_level >> 8) >> 16;  // >> 1: four strings
     }
-    sum = sum * gain >> 15;
+    t.phase[k] = phase;
+    t.level[k] = string_level;
+    t.fold[k] = string_fold;
+  }
+  for (uint8_t i = 0; i < size; ++i) {
+    int32_t sum = mix[i];
     CLIP(sum)
-    *buffer++ = Interpolate88(ws_moderate_overdrive, sum + 32768);
+    buffer[i] = sum;
+  }
+  (void)sync;
+}
+
+// BOWL - singing bowl. Four inharmonic modes (ratios measured on a Tibetan
+// bowl), each a pair of slightly detuned partials that beat, as the bowl
+// is never perfectly round.
+//   TIMBRE: rubbing the rim: 0 = struck only, up = the low modes swell and
+//           sustain while the stick keeps turning.
+//   COLOR:  brightness, weight of the upper modes.
+//   TRIG:   strike. BEAT: beating speed, DCAY: decay, SIZE: mode spread.
+static const int32_t kBowlRatios[4] = { 4096, 11305, 22118, 36577 };
+
+void DigitalOscillator::RenderSingingBowl(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  SingingBowlState& b = state_.bwl;
+  if (init_) {
+    for (uint8_t i = 0; i < 8; ++i) {
+      b.phase[i] = Random::GetWord();
+    }
+    for (uint8_t k = 0; k < 4; ++k) {
+      b.envelope[k] = 0;
+    }
+    init_ = false;
+    strike_ = true;  // a first strike when the engine is selected
+  }
+  int32_t rub = parameter_[0];
+  int32_t brightness = parameter_[1];
+  uint32_t base = ComputePhaseIncrement(pitch_);
+  int32_t beat = 1 + extra_[0] * 5;
+  int32_t decay = 1 + ((127 - extra_[1]) >> 1);  // 16 s .. 0.25 s
+  int32_t spread = 3584 + (extra_[2] << 3);       // Q12, 0.875 .. 1.12
+  uint32_t increment[8];
+  int32_t level[4];
+  for (uint8_t k = 0; k < 4; ++k) {
+    int32_t ratio = 4096 + ((kBowlRatios[k] - 4096) * spread >> 12);
+    uint32_t inc = static_cast<uint32_t>(
+        static_cast<uint64_t>(base) * ratio >> 12);
+    int32_t weight = k == 0
+        ? 32767 : (6000 + (brightness * 26767 >> 15)) >> (k - 1);
+    if (inc >= (1UL << 30)) {  // above 24 kHz: silent
+      inc = 0;
+      weight = 0;
+    }
+    increment[2 * k] = inc;
+    increment[2 * k + 1] = inc + (inc >> 16) * beat;
+    int32_t* envelope = &b.envelope[k];
+    if (strike_ && *envelope < (weight << 8)) {
+      *envelope = weight << 8;
+    }
+    // Rubbing feeds the low modes most.
+    int32_t target = ((rub * weight >> 15) >> k) << 8;
+    if (*envelope < target) {
+      *envelope += (target - *envelope) >> 8;  // swell, ~60 ms
+    } else {
+      *envelope -= (*envelope >> 8) * decay * (k + 1) >> 8;
+    }
+    level[k] = *envelope >> 8;
+  }
+  strike_ = false;
+
+  // One mode at a time over the whole block (state in registers).
+  int32_t mix[kMaxBlockSize];
+  for (uint8_t i = 0; i < size; ++i) {
+    mix[i] = 0;
+  }
+  for (uint8_t k = 0; k < 4; ++k) {
+    if (!level[k]) {
+      b.phase[2 * k] += increment[2 * k] * size;
+      b.phase[2 * k + 1] += increment[2 * k + 1] * size;
+      continue;
+    }
+    uint32_t phase_a = b.phase[2 * k];
+    uint32_t phase_b = b.phase[2 * k + 1];
+    uint32_t increment_a = increment[2 * k];
+    uint32_t increment_b = increment[2 * k + 1];
+    int32_t mode_level = level[k];
+    for (uint8_t i = 0; i < size; ++i) {
+      phase_a += increment_a;
+      phase_b += increment_b;
+      int32_t pair = Interpolate824(wav_sine, phase_a) +
+          Interpolate824(wav_sine, phase_b);
+      mix[i] += pair * mode_level >> 17;
+    }
+    b.phase[2 * k] = phase_a;
+    b.phase[2 * k + 1] = phase_b;
+  }
+  for (uint8_t i = 0; i < size; ++i) {
+    int32_t sum = mix[i];
+    CLIP(sum)
+    buffer[i] = Interpolate88(ws_moderate_overdrive, sum + 32768);
+  }
+  (void)sync;
+}
+
+// HOOM - overtone chant (khoomei, the Om of the Gyuto monks). A buzzing
+// drone, a hummed vowel on top of it, and a sharp resonance locked on one
+// harmonic of the drone that sings as a whistle above it.
+//   TIMBRE: which harmonic sings (3rd .. 16th), gliding between them.
+//   COLOR:  overtone level (0 = plain hum).
+//   TRIG:   the overtone rises from the 2nd harmonic to the selected one.
+//   VOWL: hummed vowel ("mmm" .. "aaa"), GLID: glide time, BRTH: breath.
+static const int16_t kHarmonicPitch[18] = {
+  0, 0, 1536, 2435, 3072, 3566, 3971, 4312, 4608,
+  4869, 5102, 5314, 5507, 5684, 5848, 6001, 6144, 6278
+};
+
+void DigitalOscillator::RenderOvertoneChant(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  OvertoneChantState& c = state_.cht;
+  int32_t target = (3 << 8) + (parameter_[0] * 13 >> 7);  // Q8, 3 .. 16
+  target = (target + 128) & ~255;  // whole harmonics
+  if (init_) {
+    c.phase = 0;
+    c.hum = c.bp = c.lp = 0;
+    init_ = false;
+    strike_ = true;
+  }
+  if (strike_) {
+    // TRIG: the overtone rises from the 2nd harmonic (the "wah" of a chant
+    // syllable), at the GLID speed.
+    c.harmonic = 2 << 8;
+    strike_ = false;
+  }
+  int32_t glide = 256 >> (extra_[1] >> 4);  // 256 (instant) .. 2 (~2 s)
+  c.harmonic += (target - c.harmonic) * glide >> 8;
+  int32_t h = c.harmonic >> 8;
+  int32_t frac = c.harmonic & 255;
+  int32_t peak = pitch_ + kHarmonicPitch[h] +
+      ((kHarmonicPitch[h + 1] - kHarmonicPitch[h]) * frac >> 8);
+  if (peak > (127 << 7)) peak = 127 << 7;
+  int32_t f = Interpolate824(lut_svf_cutoff, peak << 17);
+  const int32_t damp = 1200;  // Q ~ 27
+  // Input scaled by the harmonic number: the saw's harmonics fall as 1/h,
+  // so the whistle keeps the same level on every harmonic.
+  int32_t drive = c.harmonic >> 4;  // h * 16
+  int32_t overtone = parameter_[1];
+  int32_t vowel = 2048 + extra_[0] * 160;
+  int32_t breath = extra_[2] << 1;
+  uint32_t increment = ComputePhaseIncrement(pitch_);
+
+  while (size--) {
+    c.phase += increment;
+    int32_t x = BlepSaw(c.phase, increment);
+    if (breath) {
+      x += Random::GetSample() * breath >> 8;
+    }
+    c.hum += (x - c.hum) * vowel >> 15;
+    int32_t notch = (x * drive >> 10) - (c.bp * damp >> 15);
+    c.lp += f * c.bp >> 15;
+    CLIP(c.lp)
+    int32_t hp = notch - c.lp;
+    c.bp += f * hp >> 15;
+    CLIP(c.bp)
+    int32_t out = (c.hum * (32767 - (overtone >> 1)) >> 15) +
+        (c.bp * overtone >> 15);
+    CLIP(out)
+    *buffer++ = Interpolate88(ws_moderate_overdrive, out + 32768);
+  }
+  (void)sync;
+}
+
+// GONG - tam-tam. Inharmonic FM whose index blooms after the strike (the
+// roar of a gong grows after the hit, then fades with the tone).
+//   TIMBRE: strike strength (brightness of the bloom).
+//   COLOR:  inharmonicity (modulator ratio 1 .. 4).
+//   TRIG:   strike. BLOM: bloom time, DCAY: decay, FDBK: modulator
+//           feedback (metallic noise).
+void DigitalOscillator::RenderGong(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  GongState& g = state_.gng;
+  if (init_) {
+    g.carrier_phase = g.modulator_phase = 0;
+    g.amplitude = 0;
+    g.bloom = 0;
+    g.feedback = 0;
+    init_ = false;
+    strike_ = true;  // a first strike when the engine is selected
+  }
+  if (strike_) {
+    g.amplitude = 32767 << 8;
+    g.bloom = 0;
+    strike_ = false;
+  }
+  int32_t decay = 1 + ((127 - extra_[1]) >> 1);
+  g.amplitude -= (g.amplitude >> 8) * decay >> 8;
+  int32_t bloom_rate = 4096 >> (extra_[0] / 11);  // instant .. ~4 s
+  g.bloom += (32767 - g.bloom) * bloom_rate >> 12;
+  int32_t amplitude = g.amplitude >> 8;
+  int32_t index = parameter_[0] * g.bloom >> 15;
+  index = index * ((amplitude >> 1) + 16384) >> 15;
+  int32_t ratio = 4096 + (parameter_[1] * 3 >> 3);  // Q12, 1 .. 4
+  uint32_t carrier_increment = ComputePhaseIncrement(pitch_);
+  uint32_t modulator_increment = static_cast<uint32_t>(
+      static_cast<uint64_t>(carrier_increment) * ratio >> 12);
+  int32_t feedback = extra_[2] << 6;
+
+  while (size--) {
+    g.modulator_phase += modulator_increment;
+    int32_t m = Interpolate824(
+        wav_sine,
+        g.modulator_phase + (static_cast<uint32_t>(g.feedback * feedback) << 2));
+    g.feedback = m;
+    g.carrier_phase += carrier_increment;
+    uint32_t pm = static_cast<uint32_t>(m * index) << 2;
+    int32_t s = Interpolate824(wav_sine, g.carrier_phase + pm);
+    *buffer++ = s * amplitude >> 15;
   }
   (void)sync;
 }
@@ -2441,6 +2694,9 @@ DigitalOscillator::RenderFn DigitalOscillator::fn_table_[] = {
   &DigitalOscillator::RenderFoldDrone,
   &DigitalOscillator::RenderSpectralDrone,
   &DigitalOscillator::RenderTanpura,
+  &DigitalOscillator::RenderSingingBowl,
+  &DigitalOscillator::RenderOvertoneChant,
+  &DigitalOscillator::RenderGong,
   &DigitalOscillator::RenderSilence,
 };
 

@@ -80,10 +80,13 @@ enum MacroOscillatorShape {
   MACRO_OSC_SHAPE_FOLD_DRONE,
   MACRO_OSC_SHAPE_SPECTRAL_DRONE,
   MACRO_OSC_SHAPE_TANPURA,
+  MACRO_OSC_SHAPE_SINGING_BOWL,
+  MACRO_OSC_SHAPE_OVERTONE_CHANT,
+  MACRO_OSC_SHAPE_GONG,
   MACRO_OSC_SHAPE_SILENCE,
 
   MACRO_OSC_SHAPE_LAST,
-  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_TANPURA
+  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_GONG
 };
 
 enum Resolution {
@@ -148,25 +151,6 @@ enum PitchRange {
   PITCH_RANGE_LFO  // This setting is hidden by default! But now unhidden!!
 };
 
-// Physical control that drives the output filter cutoff or resonance.
-enum FilterControlSource {
-  FILTER_CONTROL_MENU,    // FCUT / FRES menu value only
-  FILTER_CONTROL_FM,      // FM CV (+ FM attenuverter) offsets the menu value
-  FILTER_CONTROL_TIMBRE,  // TIMBRE knob + CV, absolute; engine timbre centered
-  FILTER_CONTROL_COLOR,   // COLOR knob + CV, absolute; engine color centered
-  FILTER_CONTROL_LAST
-};
-
-enum DisplayView {
-  DISPLAY_VIEW_NAME,    // engine name only (original behavior)
-  DISPLAY_VIEW_PARAM,   // engine name + parameter popups
-  DISPLAY_VIEW_SCOPE,   // scrolling output level + popups
-  DISPLAY_VIEW_DIALS,   // needles: TIMBRE, COLOR, CUTOFF, RESONANCE + popups
-  DISPLAY_VIEW_TOUR,    // screensaver touring the live parameters + popups
-  DISPLAY_VIEW_FRACTAL, // screensaver: psychedelic fractal plasma + popups
-DISPLAY_VIEW_LAST
-};
-
 // FMCV destinations.
 enum FmDestination {
   FM_DESTINATION_FREQ,    // pitch (original Braids behavior)
@@ -208,14 +192,6 @@ enum Setting {
   SETTING_RESET_TYPE,
   SETTING_PITCH_SAMPLE_HOLD,
   SETTING_EDIT_WRAP,
-  SETTING_FILTER_MODE,
-  SETTING_FILTER_CUTOFF,
-  SETTING_FILTER_RESONANCE,
-  SETTING_FILTER_TRACKING,
-  SETTING_FILTER_CUTOFF_CONTROL,
-  SETTING_FILTER_RESONANCE_CONTROL,
-  SETTING_PERFORMANCE_MODE,
-  SETTING_DISPLAY_VIEW,
   SETTING_FOLD,
   SETTING_DRIVE,
   SETTING_RING_AMOUNT,
@@ -253,14 +229,6 @@ struct SettingsData {
   uint8_t reset_type;
   uint8_t pitch_sample_hold;
   uint8_t edit_wrap;
-  uint8_t filter_mode;       // OutputFilterMode
-  uint8_t filter_cutoff;     // 0..127 -> MIDI 12..139
-  uint8_t filter_resonance;  // 0..127
-  uint8_t filter_tracking;   // 0 = OFF, 1 = HALF, 2 = FULL
-  uint8_t filter_cutoff_control;     // FilterControlSource
-  uint8_t filter_resonance_control;  // FilterControlSource
-  uint8_t performance_mode;  // COLOR = cutoff, FM = resonance
-  uint8_t display_view;      // DisplayView
   uint8_t fold;              // output stage, 0 = bypass
   uint8_t drive;
   uint8_t ring_amount;

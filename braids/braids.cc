@@ -42,7 +42,6 @@
 #include "braids/drivers/internal_adc.h"
 #include "braids/drivers/system.h"
 #include "braids/macro_oscillator.h"
-#include "braids/output_filter.h"
 #include "braids/vco_jitter_source.h"
 #include "braids/ui.h"
 
@@ -64,7 +63,6 @@ volatile uint32_t* const kDwtCycleCount =
     reinterpret_cast<uint32_t*>(0xE0001004);
 const uint32_t kBlockBudgetCycles = F_CPU / 96000 * 24;
 uint32_t oscillator_cycles;  // osc.Render() alone, last block
-OutputFilter output_filter;
 Adc adc;
 Dac dac;
 DebugPin debug_pin;
@@ -164,7 +162,6 @@ void Init() {
   // debug_pin.Init();
   dac.Init();
   osc.Init();
-  output_filter.Init();
   internal_adc.Init();
   
   for (size_t i = 0; i < kNumBlocks; ++i) {
@@ -300,34 +297,15 @@ void RenderBlock() {
 
   // debug_pin.High();
 
-  // FM CV routing. The FM input either goes to its FMCV destination, or to
-  // the filter (performance mode, FCTL = FM or QCTL = FM).
+  // FM CV, sent to its FMCV destination.
   uint8_t fm_destination = settings.GetValue(SETTING_META_MODULATION);
-  bool performance = settings.GetValue(SETTING_PERFORMANCE_MODE);
-  // Performance mode: COLOR knob (+ COLOR CV) = cutoff, FM CV = resonance
-  // on top of FRES. (FINE is summed in analog with V/OCT on uBraids and
-  // most Braids: the firmware cannot read it, so it stays fine tune.)
-  uint8_t cutoff_control = performance ? uint8_t(FILTER_CONTROL_COLOR) :
-      settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
-  uint8_t resonance_control = performance ? uint8_t(FILTER_CONTROL_FM) :
-      settings.GetValue(SETTING_FILTER_RESONANCE_CONTROL);
-  if (cutoff_control == FILTER_CONTROL_FM ||
-      resonance_control == FILTER_CONTROL_FM) {
-    fm_destination = 0xff;  // FM CV drives the filter: no FMCV destination.
-  }
   int32_t fm = settings.adc_to_fm(adc.channel(3));
-  bool timbre_to_filter = cutoff_control == FILTER_CONTROL_TIMBRE ||
-      resonance_control == FILTER_CONTROL_TIMBRE;
-  bool color_to_filter = cutoff_control == FILTER_CONTROL_COLOR ||
-      resonance_control == FILTER_CONTROL_COLOR;
   // FINE knob (only on hardware where the MCU reads it): fine tune. Read
   // once per block (the driver smooths at each read).
   int32_t fine = internal_adc.value();  // ~ -32768..32767
 
-  // TIMBRE and COLOR (centered when routed to the filter).
-  int32_t parameter_1 = timbre_to_filter ? 16384 : adc.channel(0) << 3;
-  int32_t parameter_2 = color_to_filter ? 16384 : adc.channel(1) << 3;
-  osc.set_parameters(uint16_t(parameter_1), uint16_t(parameter_2));
+  osc.set_parameters(uint16_t(adc.channel(0) << 3),
+                     uint16_t(adc.channel(1) << 3));
 
   // Engine, scanned by the FM CV when FMCV = META.
   MacroOscillatorShape shape = settings.shape();
@@ -511,40 +489,7 @@ void RenderBlock() {
      sample_rate_value = ParamClip(sample_rate_value, int32_t(0), int32_t(6));
   }
 
-  // Output filter (TPT SVF). Cutoff is summed in the pitch domain:
-  // base (FCUT, or the TIMBRE/COLOR knob, which is the offset of its CV)
-  // + FM CV + keyboard tracking. Resonance: FRES or knob, + FM CV (the FM
-  // attenuverter only scales the FM CV: with nothing patched FCUT/FRES
-  // are the offsets).
-  OutputFilterMode filter_mode = static_cast<OutputFilterMode>(
-      settings.GetValue(SETTING_FILTER_MODE));
-  int32_t cutoff = int32_t(settings.GetValue(SETTING_FILTER_CUTOFF)) << 7;
-  int32_t resonance =
-      int32_t(settings.GetValue(SETTING_FILTER_RESONANCE)) << 8;
-  if (cutoff_control == FILTER_CONTROL_TIMBRE) {
-    cutoff = adc.channel(0) * (127 << 7) >> 12;
-  } else if (cutoff_control == FILTER_CONTROL_COLOR) {
-    cutoff = adc.channel(1) * (127 << 7) >> 12;
-  } else if (cutoff_control == FILTER_CONTROL_FM) {
-    cutoff += fm;
-  }
-  if (resonance_control == FILTER_CONTROL_TIMBRE) {
-    resonance = adc.channel(0) << 3;
-  } else if (resonance_control == FILTER_CONTROL_COLOR) {
-    resonance = adc.channel(1) << 3;
-  } else if (resonance_control == FILTER_CONTROL_FM) {
-    resonance += fm << 3;
-  }
-  cutoff += 12 << 7;
-  if (filter_mode != OUTPUT_FILTER_OFF || output_filter.active()) {
-    int32_t tracking = settings.GetValue(SETTING_FILTER_TRACKING);
-    cutoff += ((osc_pitch - (60 << 7)) * tracking) >> 1;
-    output_filter.Configure(filter_mode, cutoff, resonance);
-  }
-  bool filter_active = output_filter.active();
-
-  // Sample rate and bit reduction, then the output filter (smooths the
-  // bit-crush/decimation staircase), then the output level.
+  // Sample rate and bit reduction, then the output level.
   size_t decimation_factor = decimation_factors[sample_rate_value];
   uint16_t bit_mask = bit_reduction_masks[bits_value];
   if (decimation_factor != 1 || bit_mask != 0xffff) {
@@ -559,31 +504,9 @@ void RenderBlock() {
       render_buffer[i] = sample;
     }
   }
-  if (filter_active) {
-    output_filter.Process(render_buffer, kBlockSize);
-  }
-  int32_t peak = 0;
   for (size_t i = 0; i < kBlockSize; ++i) {
-    int32_t out = static_cast<int32_t>(render_buffer[i]) * gain >> 16;
-    render_buffer[i] = out;
-    if (out < 0) out = -out;
-    if (out > peak) peak = out;
+    render_buffer[i] = static_cast<int32_t>(render_buffer[i]) * gain >> 16;
   }
-
-  // Display feedback (popups, scope and dials).
-  int32_t cutoff_display = (cutoff >> 7) - 12;
-  uint8_t feedback[Ui::FEEDBACK_LAST] = {
-    uint8_t(parameter_1 >> 8),
-    uint8_t(parameter_2 >> 8),
-    uint8_t(ParamClip(cutoff_display, int32_t(0), int32_t(127))),
-    uint8_t(ParamClip(resonance >> 8, int32_t(0), int32_t(127))),
-    extras[0], extras[1], extras[2],
-    uint8_t(fold), uint8_t(drive), uint8_t(ring), uint8_t(sub)
-  };
-  ui.UpdateFeedback(
-      feedback,
-      peak,
-      (ParamClip(fine, int32_t(-32768), int32_t(32767)) + 32768) >> 4);
   render_block = (render_block + 1) % kNumBlocks;
   // debug_pin.Low();
 }

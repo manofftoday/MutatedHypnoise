@@ -511,6 +511,9 @@ MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
   &MacroOscillator::RenderDigital,  // FDRN
   &MacroOscillator::RenderDigital,  // SPEC
   &MacroOscillator::RenderDigital,  // TANP
+  &MacroOscillator::RenderDigital,  // BOWL
+  &MacroOscillator::RenderDigital,  // HOOM
+  &MacroOscillator::RenderDigital,  // GONG
   &MacroOscillator::RenderDigital,  // ZERO
 };
 

@@ -95,34 +95,6 @@ class Ui {
     blink_ = true;
   }
 
-  enum Feedback {
-    FEEDBACK_TIMBRE,
-    FEEDBACK_COLOR,
-    FEEDBACK_CUTOFF,
-    FEEDBACK_RESONANCE,
-    FEEDBACK_PARAM_1,
-    FEEDBACK_PARAM_2,
-    FEEDBACK_PARAM_3,
-    FEEDBACK_FOLD,
-    FEEDBACK_DRIVE,
-    FEEDBACK_RING,
-    FEEDBACK_SUB,
-    FEEDBACK_LAST
-  };
-
-  // Live values for the display views and popups, called once per block.
-  //   values: FEEDBACK_LAST live values (incl. CV), 0..127 each.
-  //   level: peak absolute output level of the block (0..32767).
-  //   fine: FINE knob position, 0..4095 (same scale as the ADC codes).
-  inline void UpdateFeedback(const uint8_t* values, uint16_t level,
-                             int16_t fine) {
-    memcpy(feedback_, values, FEEDBACK_LAST);
-    fine_ = fine;
-    if (level > level_peak_) {
-      level_peak_ = level;
-    }
-  }
-
   // CPU load of the last block, in % of the real-time budget: whole
   // block (interrupts included) and the sound engine alone. The menu page
   // LOAD cycles through average, peak and engine peak over ~0.5 s.
@@ -147,10 +119,8 @@ class Ui {
   void OnClick();
   void OnLongClick();
   void RefreshDisplay();
-  void DetectControlMovement(uint32_t now);
-  bool RenderMainView(char* text, uint32_t now);
-  void RenderTour(char* text, uint32_t elapsed);
-  void RenderFractal(uint16_t* segments);
+  bool DetectControlMovement(uint32_t now);
+  void RenderMainScreen(uint32_t now);
 
   stmlib::EventQueue<16> queue_;
   
@@ -178,11 +148,6 @@ class Ui {
   
   MacroOscillatorShape meta_shape_;
 
-  uint8_t feedback_[FEEDBACK_LAST];  // 0..127
-  uint16_t level_peak_;
-  uint16_t fractal_time_;    // FRAC animation clock
-  uint16_t fractal_level_;   // smoothed output level, Q8 (0..8 << 8)
-  bool fractal_frame_;       // RenderMainView chose the fractal
   uint8_t cpu_peak_;
   uint8_t cpu_oscillator_peak_;
   uint32_t cpu_sum_;
@@ -191,18 +156,14 @@ class Ui {
   uint32_t cpu_time_;
   uint32_t increment_time_;  // encoder acceleration
 
-  int16_t fine_;                   // FINE knob, 0..4095
-  // TIMBRE, COLOR, FM, FINE positions at the last detected move.
-  int16_t control_reference_[4];
+  // TIMBRE, COLOR positions at the last detected move.
+  int16_t control_reference_[2];
   // Gesture tracking, to tell a hand on a knob from a CV automation.
-  uint32_t gesture_start_[4];
-  uint32_t last_move_[4];
-  int8_t popup_feedback_;          // Feedback index, -1 = no popup
-  char popup_letter_;
+  uint32_t gesture_start_[2];
+  uint32_t last_move_[2];
+  int8_t popup_control_;           // 0 = TIMBRE, 1 = COLOR, -1 = none
   uint32_t popup_time_;
   uint32_t encoder_time_;
-  uint32_t animation_time_;
-  char scope_[kDisplayWidth];
   bool controls_initialized_;
 
   DISALLOW_COPY_AND_ASSIGN(Ui);

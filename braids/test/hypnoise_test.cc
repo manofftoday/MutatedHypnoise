@@ -4,14 +4,11 @@
 //
 // Desktop tests for the MutatedHypnoise additions.
 //
-//   1. OutputFilter: measured gain at the cutoff for LP/HP/BP, stability under
-//      maximum resonance and fast modulation, decay to silence (no limit
-//      cycles), bounded output.
-//   2. Every MacroOscillatorShape renders without crashing and produces
+//   1. Every MacroOscillatorShape renders without crashing and produces
 //      sound (except ZERO), which catches mismatches between the macro
 //      shape enum and the digital oscillator fn_table_.
-//   3. Listening files: filter_sweep.wav (LP, HP, BP sweeps over CSAW) and
-//      filter_stabs.wav (envelope-style cutoff stabs, hypnotic techno style).
+//   2. Parameter corners of the new engines, advanced parameters.
+//   3. Listening file: hypnoise_engines.wav (each new engine, 8 s).
 //
 // Build and run from the repository root:
 //   make -f braids/test/makefile hypnoise_test && ./hypnoise_test
@@ -23,7 +20,6 @@
 
 #include "braids/engine_params.h"
 #include "braids/macro_oscillator.h"
-#include "braids/output_filter.h"
 #include "stmlib/utils/random.h"
 
 using namespace braids;
@@ -54,184 +50,6 @@ static void WriteWavHeader(FILE* fp, uint32_t num_samples) {
   s = 16; fwrite(&s, 2, 1, fp);
   fwrite("data", 4, 1, fp);
   l = num_samples * 2; fwrite(&l, 4, 1, fp);
-}
-
-// Pitch units (semitone << 7) for a frequency in Hz.
-static int32_t PitchFromHz(double hz) {
-  return static_cast<int32_t>(
-      (69.0 + 12.0 * log2(hz / 440.0)) * 128.0 + 0.5);
-}
-
-// Feeds a sine at `hz` through a settled filter, returns RMS gain.
-static double MeasureGain(OutputFilterMode mode, int32_t cutoff,
-                          int32_t resonance, double hz) {
-  OutputFilter f;
-  f.Init();
-  const double amplitude = 8000.0;
-  double phase = 0.0;
-  double in_energy = 0.0, out_energy = 0.0;
-  const size_t kSettleBlocks = 400;   // 100 ms: smoothing + crossfade
-  const size_t kMeasureBlocks = 800;  // 200 ms
-  for (size_t b = 0; b < kSettleBlocks + kMeasureBlocks; ++b) {
-    f.Configure(mode, cutoff, resonance);
-    for (size_t i = 0; i < kBlockSize; ++i) {
-      int16_t x = static_cast<int16_t>(amplitude * sin(phase));
-      phase += 2.0 * M_PI * hz / kSampleRate;
-      int16_t y = f.Process(x);
-      if (b >= kSettleBlocks) {
-        in_energy += double(x) * x;
-        out_energy += double(y) * y;
-      }
-    }
-  }
-  return sqrt(out_energy / in_energy);
-}
-
-static void TestFilterResponse() {
-  printf("\n-- OutputFilter frequency response (Q = 0.5, fc = 1 kHz) --\n");
-  const int32_t fc = PitchFromHz(1000.0);
-  // TPT SVF with k = 2: |LP(fc)| = |HP(fc)| = 1/k = 0.5, normalized BP = 1.
-  double lp = MeasureGain(OUTPUT_FILTER_LP, fc, 0, 1000.0);
-  double hp = MeasureGain(OUTPUT_FILTER_HP, fc, 0, 1000.0);
-  double bp = MeasureGain(OUTPUT_FILTER_BP, fc, 0, 1000.0);
-  Check(fabs(lp - 0.5) < 0.03, "LP gain at fc ~ 0.5", lp);
-  Check(fabs(hp - 0.5) < 0.03, "HP gain at fc ~ 0.5", hp);
-  Check(fabs(bp - 1.0) < 0.05, "BP gain at fc ~ 1.0", bp);
-
-  double lp_pass = MeasureGain(OUTPUT_FILTER_LP, fc, 0, 100.0);
-  double lp_stop = MeasureGain(OUTPUT_FILTER_LP, fc, 0, 10000.0);
-  double hp_pass = MeasureGain(OUTPUT_FILTER_HP, fc, 0, 10000.0);
-  double hp_stop = MeasureGain(OUTPUT_FILTER_HP, fc, 0, 100.0);
-  Check(lp_pass > 0.9, "LP passes 100 Hz", lp_pass);
-  Check(lp_stop < 0.02, "LP rejects 10 kHz (12 dB/oct)", lp_stop);
-  Check(hp_pass > 0.9, "HP passes 10 kHz", hp_pass);
-  Check(hp_stop < 0.02, "HP rejects 100 Hz", hp_stop);
-
-  // Resonance: peak at fc must rise well above the Q = 0.5 case.
-  double lp_res = MeasureGain(OUTPUT_FILTER_LP, fc, 127 << 8, 1000.0);
-  Check(lp_res > 2.0, "LP max resonance peak > 2x", lp_res);
-
-  // Extremes of the cutoff range stay well-behaved.
-  double low = MeasureGain(OUTPUT_FILTER_LP, PitchFromHz(20.0), 0, 20.0);
-  double high = MeasureGain(OUTPUT_FILTER_HP, 140 << 7, 0, 1000.0);
-  Check(fabs(low - 0.5) < 0.05, "LP gain at 20 Hz cutoff ~ 0.5", low);
-  Check(high < 0.01, "HP at top of range rejects 1 kHz", high);
-}
-
-static void TestFilterStability() {
-  printf("\n-- OutputFilter stability --\n");
-  const OutputFilterMode modes[] = {
-    OUTPUT_FILTER_LP, OUTPUT_FILTER_HP, OUTPUT_FILTER_BP };
-  for (size_t m = 0; m < 3; ++m) {
-    OutputFilter f;
-    f.Init();
-    uint32_t rng = 12345;
-    int32_t peak = 0;
-    // 2 s of full-scale noise, max resonance, cutoff jumping every block
-    // across the whole range (worst case for zipper and instability).
-    for (size_t b = 0; b < 2 * kSampleRate / kBlockSize; ++b) {
-      rng = rng * 1664525 + 1013904223;
-      int32_t cutoff = 12 << 7;
-      cutoff += static_cast<int32_t>((rng >> 8) % (128 << 7));
-      f.Configure(modes[m], cutoff, 127 << 8);
-      for (size_t i = 0; i < kBlockSize; ++i) {
-        rng = rng * 1664525 + 1013904223;
-        int16_t x = static_cast<int16_t>(rng >> 16);
-        int32_t y = f.Process(x);
-        if (abs(y) > peak) peak = abs(y);
-      }
-    }
-    // Then silence: the output must decay to zero (no limit cycles).
-    int32_t tail = 0;
-    for (size_t b = 0; b < kSampleRate / kBlockSize; ++b) {
-      f.Configure(modes[m], 60 << 7, 127 << 8);
-      for (size_t i = 0; i < kBlockSize; ++i) {
-        int32_t y = f.Process(0);
-        if (b > (kSampleRate / kBlockSize) / 2 && abs(y) > tail) {
-          tail = abs(y);
-        }
-      }
-    }
-    const char* names[] = { "LP", "HP", "BP" };
-    char label[64];
-    snprintf(label, sizeof(label), "%s bounded under noise + modulation", names[m]);
-    Check(peak <= 32767, label, peak);
-    snprintf(label, sizeof(label), "%s decays to silence (max |y| tail)", names[m]);
-    Check(tail <= 2, label, tail);
-  }
-
-  // Low cutoff + high resonance: with the coarse a1 (1/D to 2^-14) the
-  // filter was undamped there and kept limit cycles of hundreds of LSB.
-  // After a noise burst and 5 s of silence, only a tiny DC may remain.
-  int32_t worst_tail = 0;
-  for (size_t m = 0; m < 3; ++m) {
-    for (int32_t c = 12; c <= 42; c += 3) {
-      OutputFilter f;
-      f.Init();
-      uint32_t rng = 1;
-      for (size_t b = 0; b < 6 * kSampleRate / kBlockSize; ++b) {
-        f.Configure(modes[m], c << 7, 126 << 8);
-        for (size_t i = 0; i < kBlockSize; ++i) {
-          rng = rng * 1664525 + 1013904223;
-          int16_t x = b < 400 ? static_cast<int16_t>(rng >> 16) : 0;
-          int32_t y = f.Process(x);
-          if (b > 5 * kSampleRate / kBlockSize && abs(y) > worst_tail) {
-            worst_tail = abs(y);
-          }
-        }
-      }
-    }
-  }
-  Check(worst_tail <= 8, "low cutoff + max resonance falls silent", worst_tail);
-
-  // OFF -> LP -> OFF must not jump: max step between samples during the
-  // crossfade stays small for a constant (DC) input.
-  OutputFilter f;
-  f.Init();
-  int32_t previous = 0, max_step = 0;
-  for (size_t b = 0; b < 2000; ++b) {
-    OutputFilterMode mode = (b >= 500 && b < 1500) ? OUTPUT_FILTER_HP
-                                                    : OUTPUT_FILTER_OFF;
-    f.Configure(mode, 100 << 7, 0);
-    for (size_t i = 0; i < kBlockSize; ++i) {
-      int32_t y = f.Process(10000);
-      if (b > 10 && abs(y - previous) > max_step) max_step = abs(y - previous);
-      previous = y;
-    }
-  }
-  Check(max_step < 200, "mode change crossfade: max sample step", max_step);
-}
-
-// The block version of OutputFilter::Process (fast path used by the
-// firmware) must match the per-sample version exactly, across mode
-// changes, crossfades and cutoff/resonance jumps.
-static void TestFilterBlockEquivalence() {
-  printf("\n-- Filter: block processing == per-sample processing --\n");
-  OutputFilter a, b;
-  a.Init();
-  b.Init();
-  srand(7);
-  int mismatches = 0;
-  for (int block = 0; block < 20000; ++block) {
-    OutputFilterMode mode = static_cast<OutputFilterMode>((block / 700) % 4);
-    int32_t cutoff = (12 << 7) + rand() % (128 << 7);
-    int32_t resonance = (block / 1500) % 2 ? 32767 : rand() % 32768;
-    a.Configure(mode, cutoff, resonance);
-    b.Configure(mode, cutoff, resonance);
-    int16_t x[kBlockSize], y[kBlockSize];
-    for (size_t i = 0; i < kBlockSize; ++i) {
-      x[i] = y[i] = static_cast<int16_t>((rand() % 65536) - 32768);
-    }
-    for (size_t i = 0; i < kBlockSize; ++i) {
-      x[i] = a.Process(x[i]);
-    }
-    b.Process(y, kBlockSize);
-    for (size_t i = 0; i < kBlockSize; ++i) {
-      if (x[i] != y[i]) ++mismatches;
-    }
-  }
-  Check(mismatches == 0, "block == per-sample (mismatching samples)",
-        mismatches);
 }
 
 static void TestAllEngines() {
@@ -270,10 +88,13 @@ static const MacroOscillatorShape kNewEngines[] = {
   MACRO_OSC_SHAPE_FOLD_DRONE,
   MACRO_OSC_SHAPE_SPECTRAL_DRONE,
   MACRO_OSC_SHAPE_TANPURA,
+  MACRO_OSC_SHAPE_SINGING_BOWL,
+  MACRO_OSC_SHAPE_OVERTONE_CHANT,
+  MACRO_OSC_SHAPE_GONG,
 };
 static const char* const kNewEngineNames[] = {
-  "VMRF", "VOS2", "DSWM", "FDRN", "SPEC", "TANP" };
-static const size_t kNumNewEngines = 6;
+  "VMRF", "VOS2", "DSWM", "FDRN", "SPEC", "TANP", "BOWL", "HOOM", "GONG" };
+static const size_t kNumNewEngines = 9;
 
 // Corners of TIMBRE/COLOR at a low and a high pitch, with triggers: no
 // sustained clipping, no large DC offset, audible output.
@@ -409,7 +230,6 @@ static void TestAdvancedParameters() {
 
 static void RenderListeningFiles() {
   static MacroOscillator osc;
-  OutputFilter f;
 
   // hypnoise_engines.wav: each new engine for 8 s at C2. 0-4 s: TIMBRE
   // sweeps 0 -> max (COLOR center); 4-8 s: COLOR sweeps 0 -> max, with a
@@ -439,68 +259,10 @@ static void RenderListeningFiles() {
   }
   fclose(fp);
 
-  // filter_sweep.wav: 3 x 4 s, exponential sweep 30 Hz -> 15 kHz -> 30 Hz,
-  // resonance 100/127, over a CSAW at C2.
-  fp = fopen("filter_sweep.wav", "wb");
-  const uint32_t kSweepBlocks = 4 * kSampleRate / kBlockSize;
-  WriteWavHeader(fp, 3 * kSweepBlocks * kBlockSize);
-  const OutputFilterMode modes[] = {
-    OUTPUT_FILTER_LP, OUTPUT_FILTER_HP, OUTPUT_FILTER_BP };
-  for (size_t m = 0; m < 3; ++m) {
-    osc.Init();
-    osc.set_shape(MACRO_OSC_SHAPE_CSAW);
-    f.Init();
-    for (uint32_t b = 0; b < kSweepBlocks; ++b) {
-      double t = double(b) / kSweepBlocks;
-      double tri = t < 0.5 ? 2.0 * t : 2.0 - 2.0 * t;
-      int32_t cutoff = PitchFromHz(30.0 * pow(500.0, tri));
-      f.Configure(modes[m], cutoff, 100 << 8);
-      int16_t buffer[kBlockSize];
-      uint8_t sync[kBlockSize];
-      memset(sync, 0, sizeof(sync));
-      osc.set_parameters(8000, 16384);
-      osc.set_extras(kEngineParamDefaults[MACRO_OSC_SHAPE_CSAW]);
-      osc.set_pitch(36 << 7);
-      osc.Render(sync, buffer, kBlockSize);
-      for (size_t i = 0; i < kBlockSize; ++i) buffer[i] = f.Process(buffer[i]);
-      fwrite(buffer, sizeof(int16_t), kBlockSize, fp);
-    }
-  }
-  fclose(fp);
-
-  // filter_stabs.wav: 8 s at 130 BPM, 16th-note exponential-decay
-  // envelope on the LP cutoff (what FEN1 + TRIG do on the module).
-  fp = fopen("filter_stabs.wav", "wb");
-  const uint32_t kStabBlocks = 8 * kSampleRate / kBlockSize;
-  WriteWavHeader(fp, kStabBlocks * kBlockSize);
-  osc.Init();
-  osc.set_shape(MACRO_OSC_SHAPE_SAW_SWARM);
-  f.Init();
-  const uint32_t kSixteenth = kSampleRate * 60 / 130 / 4 / kBlockSize;
-  double env = 0.0;
-  for (uint32_t b = 0; b < kStabBlocks; ++b) {
-    if (b % kSixteenth == 0) env = 1.0;
-    env *= 0.9965;
-    int32_t cutoff = (40 << 7) + static_cast<int32_t>(env * (60 << 7));
-    f.Configure(OUTPUT_FILTER_LP, cutoff, 110 << 8);
-    int16_t buffer[kBlockSize];
-    uint8_t sync[kBlockSize];
-    memset(sync, 0, sizeof(sync));
-    osc.set_parameters(20000, 12000);
-    osc.set_extras(kEngineParamDefaults[MACRO_OSC_SHAPE_SAW_SWARM]);
-    osc.set_pitch(43 << 7);
-    osc.Render(sync, buffer, kBlockSize);
-    for (size_t i = 0; i < kBlockSize; ++i) buffer[i] = f.Process(buffer[i]);
-    fwrite(buffer, sizeof(int16_t), kBlockSize, fp);
-  }
-  fclose(fp);
-  printf("\nWrote hypnoise_engines.wav, filter_sweep.wav, filter_stabs.wav\n");
+  printf("\nWrote hypnoise_engines.wav\n");
 }
 
 int main(void) {
-  TestFilterResponse();
-  TestFilterStability();
-  TestFilterBlockEquivalence();
   TestAllEngines();
   TestNewEngines();
   TestAdvancedParameters();

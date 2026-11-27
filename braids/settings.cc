@@ -62,14 +62,6 @@ const SettingsData kInitSettings = {
   0,                      // reset_type
   false,                  // pitch_sample_hold
   false,                  // edit_wrap
-  0,                      // filter_mode = OFF
-  127,                    // filter_cutoff (fully open)
-  0,                      // filter_resonance
-  0,                      // filter_tracking = OFF
-  0,                      // filter_cutoff_control = MENU
-  0,                      // filter_resonance_control = MENU
-  0,                      // performance_mode = OFF
-  DISPLAY_VIEW_TOUR,      // display_view
   0,                      // fold = bypass
   0,                      // drive = bypass
   0,                      // ring_amount = off
@@ -79,7 +71,7 @@ const SettingsData kInitSettings = {
   50,                     // pitch_cv_offset
   15401,                  // pitch_cv_scale
   2048,                   // fm_cv_offset
-  'B',                    // magic_byte
+  'H',                    // magic_byte (H: h0.6 layout)
   { },                    // engine_params: see Reset()
 };
 
@@ -106,7 +98,7 @@ void Settings::Init() {
           data_.engine_params[i][j] <= 127;
     }
   }
-  settings_within_range = settings_within_range && data_.magic_byte == 'B';
+  settings_within_range = settings_within_range && data_.magic_byte == 'H';
   if (!settings_within_range) {
     Reset(false);
   }
@@ -124,11 +116,11 @@ void Settings::Reset(bool except_cal_data) {
     data_.pitch_cv_scale = saved_pitch_cv_scale;
     data_.fm_cv_offset = saved_fm_cv_offset;
   }
-  data_.magic_byte = 'B';
+  data_.magic_byte = 'H';
 }
 
 void Settings::Save() {
-  data_.magic_byte = 'B';
+  data_.magic_byte = 'H';
   storage.ParsimoniousSave(data_, &version_token_);
 }
 
@@ -185,6 +177,9 @@ const char* const algo_values[] = {
     "FDRN", // fold drone
     "SPEC", // spectral (additive) drone
     "TANP", // tanpura
+    "BOWL", // singing bowl
+    "HOOM", // overtone chant
+    "GONG", // gong
     "ZERO", // RenderSilence
 };
 
@@ -464,14 +459,9 @@ const char* const brightness_values[] = {
     "HIGH",
 };
 
-const char* const filter_mode_values[] = { "OFF", "LPF", "HPF", "BPF" };
 
-const char* const filter_tracking_values[] = { "OFF", "HALF", "FULL" };
 
-const char* const filter_control_values[] = { "MENU", "FM", "TIMB", "COLR" };
 
-const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL", "TOUR",
-                                              "FRAC" };
 
 const char* const reset_type_values[] = {
     "NO", // 0
@@ -521,14 +511,6 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 3, "RST ", reset_type_values },
   { 0, 1, "TS+H", boolean_values },
   { 0, 1, "WRAP", boolean_values },
-  { 0, 3, "FMOD", filter_mode_values },
-  { 0, 127, "FCUT", mod_rate_values },
-  { 0, 127, "FRES", mod_rate_values },
-  { 0, 2, "FTRK", filter_tracking_values },
-  { 0, FILTER_CONTROL_LAST - 1, "FCTL", filter_control_values },
-  { 0, FILTER_CONTROL_LAST - 1, "QCTL", filter_control_values },
-  { 0, 1, "PERF", boolean_values },
-  { 0, DISPLAY_VIEW_LAST - 1, "VIEW", display_view_values },
   { 0, 127, "FOLD", mod_rate_values },
   { 0, 127, "DRIV", mod_rate_values },
   { 0, 127, "RING", mod_rate_values },
@@ -540,11 +522,11 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 0, "CAL.", NULL },
   { 0, 0, "    ", NULL },  // Placeholder for CV tester
   { 0, 0, "LOAD", NULL },  // CPU load meter
-{ 0, 0, "h0.5", NULL },  // Placeholder for version string
+{ 0, 0, "h0.6", NULL },  // Placeholder for version string
 };
 
 // Menu order: engine, its three advanced parameters, the output stage
-// (sound design), the filter, then everything else.
+// (sound design), then everything else.
 /* static */
 const Setting Settings::settings_order_[] = {
   SETTING_OSCILLATOR_SHAPE,
@@ -556,13 +538,6 @@ const Setting Settings::settings_order_[] = {
   SETTING_RING_AMOUNT,
   SETTING_RING_RATIO,
   SETTING_SUB_LEVEL,
-  SETTING_FILTER_MODE,
-  SETTING_FILTER_CUTOFF,
-  SETTING_FILTER_RESONANCE,
-  SETTING_FILTER_TRACKING,
-  SETTING_PERFORMANCE_MODE,
-  SETTING_FILTER_CUTOFF_CONTROL,
-  SETTING_FILTER_RESONANCE_CONTROL,
   SETTING_META_MODULATION,
   SETTING_INITIAL_GAIN,
   SETTING_RESOLUTION,
@@ -576,7 +551,6 @@ const Setting Settings::settings_order_[] = {
   SETTING_TRIG_DELAY,
   SETTING_PITCH_SAMPLE_HOLD,
   SETTING_OSC_SYNC,
-  SETTING_DISPLAY_VIEW,
   SETTING_BRIGHTNESS,
   SETTING_EDIT_WRAP,
   SETTING_RESET_TYPE,

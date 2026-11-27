@@ -82,6 +82,9 @@ enum DigitalOscillatorShape {
   OSC_SHAPE_FOLD_DRONE,
   OSC_SHAPE_SPECTRAL_DRONE,
   OSC_SHAPE_TANPURA,
+  OSC_SHAPE_SINGING_BOWL,
+  OSC_SHAPE_OVERTONE_CHANT,
+  OSC_SHAPE_GONG,
   OSC_SHAPE_SILENCE,
 
   // Leave this here because it marks the end of the oscillator model list.
@@ -240,9 +243,32 @@ struct TanpuraState {
   int32_t envelope[4];      // Q23
   int32_t drift[4];         // organic detune random walks, Q8
   int16_t drift_target[4];
+  int32_t level[4];         // per-sample interpolated string level, Q23
+  int32_t fold[4];          // per-sample interpolated jawari gain, Q20
   uint32_t cycle_phase;
   uint8_t attack[4];
   uint8_t next_string;
+};
+
+struct SingingBowlState {
+  uint32_t phase[8];        // 4 modes x 2 beating partials
+  int32_t envelope[4];      // Q23
+};
+
+struct OvertoneChantState {
+  uint32_t phase;
+  int32_t hum;              // base vowel (one-pole low-pass)
+  int32_t bp;               // overtone resonator (Chamberlin SVF)
+  int32_t lp;
+  int32_t harmonic;         // selected overtone with glide, Q8
+};
+
+struct GongState {
+  uint32_t carrier_phase;
+  uint32_t modulator_phase;
+  int32_t amplitude;        // Q23
+  int32_t bloom;            // Q15
+  int32_t feedback;
 };
 
 struct HatState {
@@ -272,6 +298,9 @@ union DigitalOscillatorState {
   FoldDroneState fdr;
   SpectralDroneState spc;
   TanpuraState tnp;
+  SingingBowlState bwl;
+  OvertoneChantState cht;
+  GongState gng;
 uint32_t modulator_phase;
 };
 
@@ -371,6 +400,9 @@ class DigitalOscillator {
   void RenderFoldDrone(const uint8_t*, int16_t*, uint8_t);
   void RenderSpectralDrone(const uint8_t*, int16_t*, uint8_t);
   void RenderTanpura(const uint8_t*, int16_t*, uint8_t);
+  void RenderSingingBowl(const uint8_t*, int16_t*, uint8_t);
+  void RenderOvertoneChant(const uint8_t*, int16_t*, uint8_t);
+  void RenderGong(const uint8_t*, int16_t*, uint8_t);
 
   void RenderQuestionMark(const uint8_t*, int16_t*, uint8_t);
  
