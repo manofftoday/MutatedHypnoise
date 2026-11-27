@@ -42,6 +42,28 @@ using namespace stmlib;
 
 const uint32_t kEncoderLongPressTime = 800;
 
+// Display views (SETTING_DISPLAY_VIEW).
+const uint32_t kPopupDuration = 1200;    // ms a parameter popup stays up
+const uint32_t kNameHoldTime = 1500;     // ms the name stays after an edit
+const uint32_t kAnimationPeriod = 50;    // ms between view frames
+const int16_t kControlMoveThreshold = 48;  // ADC codes (of 4096), ~1.2%
+const uint8_t kSplashFrames = 16;
+
+// Font glyphs (resources/characters.py).
+const uint8_t kGlyphNeedle = 0x90;  // 8 needle angles, clockwise from SW
+const uint8_t kGlyphMeter = 0x98;   // 8 fill levels, bottom-up
+
+// 0..127 -> blank or one of the 8 fill levels.
+static inline char MeterGlyph(uint8_t value) {
+  uint8_t level = value * 9 >> 7;
+  return level ? static_cast<char>(kGlyphMeter + level - 1) : ' ';
+}
+
+// 0..127 -> needle from lower-left (min) through up to lower-right (max).
+static inline char DialGlyph(uint8_t value) {
+  return static_cast<char>(kGlyphNeedle + (value * 7 >> 7));
+}
+
 void Ui::Init() {
   encoder_.Init();
   display_.Init();
@@ -54,6 +76,83 @@ void Ui::Init() {
   last_setting_index_ = setting_index_;
   mode_ = MODE_SPLASH;
   just_reset_ = false;
+  popup_feedback_ = -1;
+  controls_initialized_ = false;
+  memset(scope_, ' ', kDisplayWidth);
+}
+
+void Ui::DetectControlMovement(uint32_t now) {
+  if (!controls_initialized_ || mode_ == MODE_SPLASH) {
+    memcpy(control_reference_, cv_, sizeof(control_reference_));
+    controls_initialized_ = true;
+    return;
+  }
+  // TIMBRE, COLOR and FM, and the filter source each one may drive.
+  static const uint8_t kChannel[] = { 0, 1, 3 };
+  static const uint8_t kSource[] = {
+    FILTER_CONTROL_TIMBRE, FILTER_CONTROL_COLOR, FILTER_CONTROL_FM
+  };
+  uint8_t cutoff_control = settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
+  uint8_t resonance_control = settings.GetValue(
+      SETTING_FILTER_RESONANCE_CONTROL);
+  for (uint8_t i = 0; i < 3; ++i) {
+    uint8_t channel = kChannel[i];
+    int16_t delta = cv_[channel] - control_reference_[channel];
+    if (delta < kControlMoveThreshold && delta > -kControlMoveThreshold) {
+      continue;
+    }
+    control_reference_[channel] = cv_[channel];
+    if (cutoff_control == kSource[i]) {
+      popup_feedback_ = FEEDBACK_CUTOFF;
+      popup_letter_ = 'F';
+    } else if (resonance_control == kSource[i]) {
+      popup_feedback_ = FEEDBACK_RESONANCE;
+      popup_letter_ = 'Q';
+    } else if (i == 0) {
+      popup_feedback_ = FEEDBACK_TIMBRE;
+      popup_letter_ = 'T';
+    } else if (i == 1) {
+      popup_feedback_ = FEEDBACK_COLOR;
+      popup_letter_ = 'C';
+    } else {
+      continue;  // FM CV not routed to the filter: no popup.
+    }
+    popup_time_ = now;
+  }
+}
+
+// Main screen for the PARM/SCOP/DIAL views. Returns false when the engine
+// name should be shown instead.
+bool Ui::RenderMainView(char* text, uint32_t now) {
+  uint8_t view = settings.GetValue(SETTING_DISPLAY_VIEW);
+  if (view == DISPLAY_VIEW_NAME) {
+    return false;
+  }
+  if (popup_feedback_ >= 0) {
+    if (now - popup_time_ < kPopupDuration) {
+      // Letter, level glyph, value 00..99 (e.g. F, 5/8 full, 63).
+      uint8_t value = feedback_[popup_feedback_];
+      uint8_t percent = value * 100 >> 7;
+      text[0] = popup_letter_;
+      text[1] = MeterGlyph(value);
+      text[2] = '0' + percent / 10;
+      text[3] = '0' + percent % 10;
+      return true;
+    }
+    popup_feedback_ = -1;
+  }
+  if (view == DISPLAY_VIEW_PARAM || now - encoder_time_ < kNameHoldTime) {
+    return false;
+  }
+  if (view == DISPLAY_VIEW_SCOPE) {
+    memcpy(text, scope_, kDisplayWidth);
+  } else {
+    text[0] = DialGlyph(feedback_[FEEDBACK_TIMBRE]);
+    text[1] = DialGlyph(feedback_[FEEDBACK_COLOR]);
+    text[2] = DialGlyph(feedback_[FEEDBACK_MOD1]);
+    text[3] = DialGlyph(feedback_[FEEDBACK_MOD2]);
+  }
+  return true;
 }
 
 void Ui::Poll() {
@@ -93,13 +192,28 @@ void Ui::RefreshDisplay() {
   switch (mode_) {
      case MODE_SPLASH:
        {
-         char text[] = "BZZZ";
+         // Rotating needles with a phase offset per digit, then the name.
+         char text[] = "HYPN";
+         if (splash_frame_ < kSplashFrames - 6) {
+           for (uint8_t i = 0; i < kDisplayWidth; ++i) {
+             text[i] = static_cast<char>(
+                 kGlyphNeedle + ((splash_frame_ + i * 2) & 7));
+           }
+         }
          display_.Print(text);
        }
        break;
     
     case MODE_EDIT:
       {
+        if (setting_ == SETTING_OSCILLATOR_SHAPE) {
+          char text[kDisplayWidth + 1];
+          text[kDisplayWidth] = '\0';
+          if (RenderMainView(text, system_clock.milliseconds())) {
+            display_.Print(text);
+            break;
+          }
+        }
         uint8_t value = settings.GetValue(setting_);
         if (setting_ == SETTING_OSCILLATOR_SHAPE &&
             (settings.GetValue(SETTING_META_MODULATION) == 1 ||
@@ -257,8 +371,10 @@ void Ui::OnIncrement(const Event& e) {
 
 void Ui::DoEvents() {
   bool refresh_display_ = false;
+  uint32_t now = system_clock.milliseconds();
   while (queue_.available()) {
     Event e = queue_.PullEvent();
+    encoder_time_ = now;
     if (e.control_type == CONTROL_ENCODER_CLICK) {
       OnClick();
     } else if (e.control_type == CONTROL_ENCODER_LONG_CLICK) {
@@ -273,7 +389,7 @@ void Ui::DoEvents() {
   }
   if (queue_.idle_time() >= 50 && mode_ == MODE_SPLASH) {
      ++splash_frame_;
-     if (splash_frame_ == 8) {
+     if (splash_frame_ == kSplashFrames) {
        splash_frame_ = 0;
        mode_ = MODE_EDIT;
        setting_ = SETTING_OSCILLATOR_SHAPE;
@@ -290,6 +406,23 @@ void Ui::DoEvents() {
       mode_ == MODE_EDIT &&
       (settings.GetValue(SETTING_META_MODULATION) == 1 || 
        settings.GetValue(SETTING_METASEQ) )) {
+    refresh_display_ = true;
+  }
+  DetectControlMovement(now);
+  if (mode_ == MODE_EDIT && setting_ == SETTING_OSCILLATOR_SHAPE &&
+      settings.GetValue(SETTING_DISPLAY_VIEW) != DISPLAY_VIEW_NAME &&
+      now - animation_time_ >= kAnimationPeriod) {
+    animation_time_ = now;
+    // Scope: scroll left, push the peak level since the last frame,
+    // 6 dB per step (blank below -48 dBFS).
+    uint8_t level = 0;
+    for (uint16_t peak = level_peak_ >> 7; peak; peak >>= 1) {
+      ++level;
+    }
+    memmove(scope_, scope_ + 1, kDisplayWidth - 1);
+    scope_[kDisplayWidth - 1] = level
+        ? static_cast<char>(kGlyphMeter + level - 1) : ' ';
+    level_peak_ = 0;
     refresh_display_ = true;
   }
   if (refresh_display_) {

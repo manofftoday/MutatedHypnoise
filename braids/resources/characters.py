@@ -177,6 +177,16 @@ characters = {
   '\x96': 'abcdefl',
   '\x97': 'abcdefm',
 
+  # Level meter, bottom-up fill (MutatedHypnoise display views)
+  '\x98': 'd',
+  '\x99': 'dm',
+  '\x9A': 'dmnl',
+  '\x9B': 'dmnlec',
+  '\x9C': 'dmnlecpk',
+  '\x9D': 'dmnlecpkh',
+  '\x9E': 'dmnlecpkhgjfb',
+  '\x9F': 'abcdefghjklmnp',
+
   # Spinner 2
   # '\x98': 'ab',
   # '\x99': 'abc',
@@ -194,7 +204,7 @@ characters = {
 
 character_table = []
 # for i in xrange(256):
-for i in xrange(33,152):
+for i in xrange(33,160):
   segments = characters.get(chr(i), '')
   character_table.append(sum(MASKS[segment] for segment in segments))
   

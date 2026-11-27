@@ -204,13 +204,103 @@ static void TestAllEngines() {
   }
 }
 
+static const MacroOscillatorShape kNewEngines[] = {
+  MACRO_OSC_SHAPE_VOWEL_MORPH,
+  MACRO_OSC_SHAPE_VOSIM_PLUS,
+  MACRO_OSC_SHAPE_DRIFT_SWARM,
+  MACRO_OSC_SHAPE_FOLD_DRONE,
+  MACRO_OSC_SHAPE_SPECTRAL_DRONE,
+};
+static const char* const kNewEngineNames[] = {
+  "VMRF", "VOS2", "DSWM", "FDRN", "SPEC" };
+static const size_t kNumNewEngines = 5;
+
+// Corners of TIMBRE/COLOR at a low and a high pitch, with triggers: no
+// sustained clipping, no large DC offset, audible output.
+static void TestNewEngines() {
+  printf("\n-- New engines: parameter corners --\n");
+  const int16_t kValues[] = { 0, 16384, 32767 };
+  const int16_t kPitches[] = { 24 << 7, 60 << 7, 96 << 7 };
+  for (size_t e = 0; e < kNumNewEngines; ++e) {
+    double worst_clip = 0.0, worst_dc = 0.0, min_rms = 1e9;
+    for (size_t p = 0; p < 3; ++p) {
+      for (size_t t = 0; t < 3; ++t) {
+        for (size_t c = 0; c < 3; ++c) {
+          static MacroOscillator osc;
+          osc.Init();
+          osc.set_shape(kNewEngines[e]);
+          double sum = 0.0, energy = 0.0;
+          size_t clipped = 0, n = 0;
+          for (size_t b = 0; b < kSampleRate / 2 / kBlockSize; ++b) {
+            int16_t buffer[kBlockSize];
+            uint8_t sync[kBlockSize];
+            memset(sync, 0, sizeof(sync));
+            if (b % 500 == 0) osc.Strike();
+            osc.set_parameters(kValues[t], kValues[c]);
+            osc.set_pitch(kPitches[p]);
+            osc.Render(sync, buffer, kBlockSize);
+            if (b < 100) continue;  // let smoothing / DC trackers settle
+            for (size_t i = 0; i < kBlockSize; ++i, ++n) {
+              sum += buffer[i];
+              energy += double(buffer[i]) * buffer[i];
+              if (buffer[i] >= 32767 || buffer[i] <= -32767) ++clipped;
+            }
+          }
+          double rms = sqrt(energy / n);
+          double dc = fabs(sum / n);
+          double clip = double(clipped) / n;
+          if (clip > worst_clip) worst_clip = clip;
+          if (dc / 32768.0 > worst_dc) worst_dc = dc / 32768.0;
+          if (rms < min_rms) min_rms = rms;
+        }
+      }
+    }
+    char label[64];
+    snprintf(label, sizeof(label), "%s clipped sample ratio < 2%%",
+             kNewEngineNames[e]);
+    Check(worst_clip < 0.02, label, worst_clip);
+    snprintf(label, sizeof(label), "%s DC offset < 10%% FS", kNewEngineNames[e]);
+    Check(worst_dc < 0.10, label, worst_dc);
+    snprintf(label, sizeof(label), "%s quietest corner rms > 300",
+             kNewEngineNames[e]);
+    Check(min_rms > 300.0, label, min_rms);
+  }
+}
+
 static void RenderListeningFiles() {
   static MacroOscillator osc;
   OutputFilter f;
 
+  // hypnoise_engines.wav: each new engine for 8 s at C2. 0-4 s: TIMBRE
+  // sweeps 0 -> max (COLOR center); 4-8 s: COLOR sweeps 0 -> max, with a
+  // trigger every 0.5 s.
+  FILE* fp = fopen("hypnoise_engines.wav", "wb");
+  const uint32_t kEngineBlocks = 8 * kSampleRate / kBlockSize;
+  WriteWavHeader(fp, kNumNewEngines * kEngineBlocks * kBlockSize);
+  for (size_t e = 0; e < kNumNewEngines; ++e) {
+    osc.Init();
+    osc.set_shape(kNewEngines[e]);
+    for (uint32_t b = 0; b < kEngineBlocks; ++b) {
+      uint32_t half = kEngineBlocks / 2;
+      int16_t timbre = b < half ? int16_t(32767.0 * b / half) : 16384;
+      int16_t color = b < half ? 16384 : int16_t(32767.0 * (b - half) / half);
+      if (b >= half && (b - half) % (kSampleRate / 2 / kBlockSize) == 0) {
+        osc.Strike();
+      }
+      int16_t buffer[kBlockSize];
+      uint8_t sync[kBlockSize];
+      memset(sync, 0, sizeof(sync));
+      osc.set_parameters(timbre, color);
+      osc.set_pitch(36 << 7);
+      osc.Render(sync, buffer, kBlockSize);
+      fwrite(buffer, sizeof(int16_t), kBlockSize, fp);
+    }
+  }
+  fclose(fp);
+
   // filter_sweep.wav: 3 x 4 s, exponential sweep 30 Hz -> 15 kHz -> 30 Hz,
   // resonance 100/127, over a CSAW at C2.
-  FILE* fp = fopen("filter_sweep.wav", "wb");
+  fp = fopen("filter_sweep.wav", "wb");
   const uint32_t kSweepBlocks = 4 * kSampleRate / kBlockSize;
   WriteWavHeader(fp, 3 * kSweepBlocks * kBlockSize);
   const OutputFilterMode modes[] = {
@@ -261,13 +351,14 @@ static void RenderListeningFiles() {
     fwrite(buffer, sizeof(int16_t), kBlockSize, fp);
   }
   fclose(fp);
-  printf("\nWrote filter_sweep.wav and filter_stabs.wav\n");
+  printf("\nWrote hypnoise_engines.wav, filter_sweep.wav, filter_stabs.wav\n");
 }
 
 int main(void) {
   TestFilterResponse();
   TestFilterStability();
   TestAllEngines();
+  TestNewEngines();
   RenderListeningFiles();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED",
          failures, failures == 1 ? "" : "s");

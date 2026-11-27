@@ -1826,6 +1826,258 @@ void DigitalOscillator::RenderGranularCloud(
 // }
 */
 
+// -----------------------------------------------------------------------------
+//
+// MutatedHypnoise engines.
+//
+// Note: wav_sine holds -cos (it starts at -32767): a phase of 1 << 30
+// (quarter cycle) is the zero crossing going up, i.e. sin(0).
+
+static const uint32_t kSinePhaseOffset = 1UL << 30;
+
+// VMRF - vowel morph with formant shift. Three sine formants restarted at
+// every pitch period under a decaying (squared) window.
+//   TIMBRE: continuous a-e-i-o-u morph (tenor formant data).
+//   COLOR:  shifts all formants by up to +/-1 octave, independently from the
+//           pitch (center = natural vowel; down = giant, up = tiny).
+void DigitalOscillator::RenderVowelMorph(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  VowelMorphState& v = state_.vmf;
+  int32_t shift = (parameter_[1] - 16384) * 3 >> 5;  // +/-1536 = 1 octave
+  for (uint8_t i = 0; i < 3; ++i) {
+    int32_t f = InterpolateFormantParameter(
+        formant_f_data, 8192, parameter_[0], i) + shift;
+    v.formant_increment[i] = ComputePhaseIncrement(f);
+    v.formant_amplitude[i] = InterpolateFormantParameter(
+        formant_a_data, 8192, parameter_[0], i);
+  }
+  while (size--) {
+    phase_ += phase_increment_;
+    if (*sync++) {
+      phase_ = 0;
+    }
+    if (phase_ < phase_increment_) {
+      // Restart each formant at its upward zero crossing (no click).
+      v.formant_phase[0] = v.formant_phase[1] = v.formant_phase[2] =
+          kSinePhaseOffset;
+    }
+    uint32_t window = 65535 - (phase_ >> 16);
+    window = window * window >> 17;  // 0..32767
+
+    v.formant_phase[0] += v.formant_increment[0];
+    v.formant_phase[1] += v.formant_increment[1];
+    v.formant_phase[2] += v.formant_increment[2];
+    int32_t sample = Interpolate824(wav_sine, v.formant_phase[0]) *
+        v.formant_amplitude[0] >> 15;
+    sample += wav_sine[v.formant_phase[1] >> 24] *
+        v.formant_amplitude[1] >> 15;
+    sample += wav_sine[v.formant_phase[2] >> 24] *
+        v.formant_amplitude[2] >> 15;
+    sample = sample * static_cast<int32_t>(window) >> 14;
+    // Partial formant cycles under the window are not zero-mean.
+    v.dc += (sample - v.dc) >> 10;  // ~15 Hz
+    sample -= v.dc;
+    CLIP(sample)
+    *buffer++ = Interpolate88(ws_moderate_overdrive, sample + 32768);
+  }
+}
+
+// VOS2 - VOSIM (Kaegi & Tempelaars): a train of sin^2 pulses at the formant
+// frequency, each one attenuated by a constant ratio, restarted at every
+// pitch period.
+//   TIMBRE: formant (pulse) frequency, MIDI 48..108.
+//   COLOR:  pulse decay, from short buzzy bursts to long resonant ringing.
+void DigitalOscillator::RenderVosimPlus(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  VosimPlusState& v = state_.vsp;
+  uint32_t pulse_increment = ComputePhaseIncrement(
+      (48 << 7) + (parameter_[0] * 60 >> 8));
+  int32_t decay = 16384 + (parameter_[1] >> 1);
+  if (decay > 32440) {
+    decay = 32440;  // 0.99
+  }
+  uint32_t pulse_phase = v.pulse_phase;
+  int32_t amplitude = v.amplitude;
+  int32_t dc = v.dc;
+  while (size--) {
+    phase_ += phase_increment_;
+    if (*sync++) {
+      phase_ = 0;
+    }
+    if (phase_ < phase_increment_) {
+      pulse_phase = 0;
+      amplitude = 32767;
+    }
+    pulse_phase += pulse_increment;
+    if (pulse_phase < pulse_increment) {
+      amplitude = amplitude * decay >> 15;
+    }
+    // sin^2(pi t) = (1 - cos(2 pi t)) / 2, and wav_sine is -cos.
+    int32_t pulse = (32767 + wav_sine[pulse_phase >> 24]) >> 1;
+    int32_t sample = pulse * amplitude >> 15;
+    dc += (sample - dc) >> 10;  // DC tracker, ~15 Hz
+    sample -= dc;
+    CLIP(sample)
+    *buffer++ = sample;
+  }
+  v.pulse_phase = pulse_phase;
+  v.amplitude = amplitude;
+  v.dc = dc;
+}
+
+// DSWM - drift swarm. Seven saws spread around the pitch, each one
+// wandering on its own slow random walk.
+//   TIMBRE: spread, up to +/-3 semitones between the outer voices.
+//   COLOR:  drift depth, up to +/-4 semitones per voice.
+//   TRIG:   new drift targets for all voices ("bloom").
+void DigitalOscillator::RenderDriftSwarm(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  DriftSwarmState& d = state_.dsw;
+  if (init_) {
+    for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
+      d.phase[i] = Random::GetWord();
+    }
+    init_ = false;
+  }
+  if (strike_) {
+    for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
+      d.target[i] = Random::GetSample();
+    }
+    strike_ = false;
+  }
+  // One voice gets a new target every 128 ms (each one every ~0.9 s).
+  uint16_t counter = ++d.counter;
+  if ((counter & 511) == 0) {
+    d.target[(counter >> 9) % kNumDriftVoices] = Random::GetSample();
+  }
+  int32_t spread = parameter_[0] * parameter_[0] >> 23;  // 0..127 per voice
+  int32_t depth = parameter_[1] >> 7;
+  depth = depth * depth >> 7;  // 0..508
+
+  uint32_t increment[kNumDriftVoices];
+  for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
+    // ~0.5 s glide to the target (at the 4 kHz block rate).
+    d.drift[i] += ((static_cast<int32_t>(d.target[i]) << 8) - d.drift[i]) >> 11;
+    int32_t pitch = pitch_ + spread * (static_cast<int32_t>(i) - 3) +
+        ((d.drift[i] >> 8) * depth >> 15);
+    increment[i] = ComputePhaseIncrement(pitch);
+  }
+  while (size--) {
+    if (*sync++) {
+      memset(d.phase, 0, sizeof(d.phase));
+    }
+    int32_t sample = 0;
+    for (uint8_t i = 0; i < kNumDriftVoices; ++i) {
+      d.phase[i] += increment[i];
+      sample += d.phase[i] >> 20;
+    }
+    sample = (sample - (kNumDriftVoices << 11)) << 1;
+    CLIP(sample)
+    *buffer++ = Interpolate88(ws_moderate_overdrive, sample + 32768);
+  }
+}
+
+// FDRN - fold drone. Two sines (root and root + interval) summed into a
+// sine wavefolder.
+//   TIMBRE: fold depth (gentle saturation -> dense folded harmonics), with a
+//           slow internal "breathing" LFO.
+//   COLOR:  interval of the second sine, 0..19 semitones (slightly detuned,
+//           so the unison beats).
+//   TRIG:   a decaying fold burst ("ping"), for rhythmic patterns.
+void DigitalOscillator::RenderFoldDrone(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  FoldDroneState& f = state_.fdr;
+  uint32_t increment_b = ComputePhaseIncrement(
+      pitch_ + 6 + (parameter_[1] * 19 >> 8));
+  if (strike_) {
+    f.burst = 32767;
+    strike_ = false;
+  }
+  f.burst -= f.burst >> 9;  // ~130 ms
+  f.lfo_phase += 53687;     // ~0.05 Hz at the 4 kHz block rate
+  int32_t lfo = wav_sine[f.lfo_phase >> 24];
+  // Drive in Q12: 1 (sin(pi/2 x)) to 8, +/-12.5% breathing, + up to 4 burst.
+  int32_t drive = 4096 + (parameter_[0] * 7 >> 3);
+  drive += (drive >> 3) * lfo >> 15;
+  drive += f.burst >> 1;
+  while (size--) {
+    phase_ += phase_increment_;
+    f.phase[1] += increment_b;
+    if (*sync++) {
+      phase_ = f.phase[1] = 0;
+    }
+    int32_t sum = (Interpolate824(wav_sine, phase_) +
+                   Interpolate824(wav_sine, f.phase[1])) >> 1;
+    // |sum| * drive < 2^31; drive = 1 maps full scale to a quarter cycle.
+    // + a quarter cycle: sin() (odd, no DC) instead of -cos().
+    uint32_t fold_phase = static_cast<uint32_t>(sum * drive) << 3;
+    *buffer++ = Interpolate824(wav_sine, fold_phase + kSinePhaseOffset);
+  }
+}
+
+// SPEC - spectral drone. Eight additive partials.
+//   TIMBRE: moves a spectral peak from the fundamental to the 8th partial.
+//   COLOR:  compresses (below center) or stretches (above) the partial
+//           series by up to 12.5%: bell-like, inharmonic spectra.
+//   Each partial shimmers with its own very slow LFO.
+//   TRIG:   moves the shimmer LFOs to a new random place ("spectral bloom").
+static const int16_t kPartialPitch[kNumSpectralPartials] = {
+  // 12 * 128 * log2(n)
+  0, 1536, 2435, 3072, 3567, 3971, 4312, 4608
+};
+
+void DigitalOscillator::RenderSpectralDrone(
+    const uint8_t* sync,
+    int16_t* buffer,
+    uint8_t size) {
+  SpectralDroneState& s = state_.spc;
+  if (strike_) {
+    s.shimmer_phase = Random::GetWord();
+    strike_ = false;
+  }
+  s.shimmer_phase += 26843;  // ~0.025 Hz, x3..x10 per partial
+  int32_t stretch = (parameter_[1] - 16384) >> 3;  // Q14, +/-0.125
+  int32_t center = parameter_[0] * 7 >> 7;         // partial index, Q8
+  for (uint8_t i = 0; i < kNumSpectralPartials; ++i) {
+    int32_t pitch = pitch_ + kPartialPitch[i] +
+        (kPartialPitch[i] * stretch >> 14);
+    s.increment[i] = ComputePhaseIncrement(pitch);
+    int32_t distance = (static_cast<int32_t>(i) << 8) - center;
+    if (distance < 0) {
+      distance = -distance;
+    }
+    int32_t target = distance < 512 ? (512 - distance) * 48 : 0;
+    target += 6144 >> i;  // 1/2^n floor keeps a body under the peak
+    int32_t lfo = wav_sine[(s.shimmer_phase * (i + 3)) >> 24];
+    target = target * (28672 + (lfo >> 3)) >> 15;  // 0.75..1
+    if (pitch > (127 << 7)) {
+      target = 0;  // above ~12.5 kHz: dropped (no aliasing)
+    }
+    s.amplitude[i] += (target - s.amplitude[i]) >> 4;
+  }
+  while (size--) {
+    if (*sync++) {
+      memset(s.phase, 0, sizeof(s.phase));
+    }
+    int32_t sample = 0;
+    for (uint8_t i = 0; i < kNumSpectralPartials; ++i) {
+      s.phase[i] += s.increment[i];
+      sample += wav_sine[s.phase[i] >> 24] * s.amplitude[i] >> 15;
+    }
+    sample >>= 1;
+    CLIP(sample)
+    *buffer++ = sample;
+  }
+}
+
 void DigitalOscillator::RenderSilence(
     const uint8_t* sync,
     int16_t* buffer,
@@ -1856,6 +2108,11 @@ DigitalOscillator::RenderFn DigitalOscillator::fn_table_[] = {
   &DigitalOscillator::RenderWaveParaphonic,
   &DigitalOscillator::RenderClockedNoise,
   &DigitalOscillator::RenderGranularCloud,
+  &DigitalOscillator::RenderVowelMorph,
+  &DigitalOscillator::RenderVosimPlus,
+  &DigitalOscillator::RenderDriftSwarm,
+  &DigitalOscillator::RenderFoldDrone,
+  &DigitalOscillator::RenderSpectralDrone,
   &DigitalOscillator::RenderSilence,
 };
 

@@ -350,6 +350,19 @@ void RenderBlock() {
   // debug_pin.High();
 
   uint8_t meta_mod = settings.GetValue(SETTING_META_MODULATION); // FMCV setting, in fact
+  // Output filter control sources (FCTL / QCTL). A control routed to the
+  // filter is taken away from its usual destination.
+  uint8_t cutoff_control = settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
+  uint8_t resonance_control = settings.GetValue(
+      SETTING_FILTER_RESONANCE_CONTROL);
+  if (cutoff_control == FILTER_CONTROL_FM ||
+      resonance_control == FILTER_CONTROL_FM) {
+    meta_mod = 0xff;  // FM CV drives the filter: no FMCV destination.
+  }
+  bool timbre_to_filter = cutoff_control == FILTER_CONTROL_TIMBRE ||
+      resonance_control == FILTER_CONTROL_TIMBRE;
+  bool color_to_filter = cutoff_control == FILTER_CONTROL_COLOR ||
+      resonance_control == FILTER_CONTROL_COLOR;
   uint8_t modulator1_mode = settings.GetValue(SETTING_MOD1_MODE);
   uint8_t modulator2_mode = settings.GetValue(SETTING_MOD2_MODE);
 
@@ -596,7 +609,8 @@ void RenderBlock() {
   } // end Turing machine
 
   // modulate timbre
-  int32_t parameter_1 = adc.channel(0) << 3; 
+  // (centered when the TIMBRE knob/CV is routed to the filter)
+  int32_t parameter_1 = timbre_to_filter ? 16384 : adc.channel(0) << 3;
   if (modulator1_mode == 2) {
 	 parameter_1 -= (ad_value * settings.mod1_timbre_depth()) >> 9;
   } else {
@@ -615,7 +629,8 @@ void RenderBlock() {
   parameter_1 = ParamClip(parameter_1, static_cast<int32_t>(0), static_cast<int32_t>(32767));
 
   // modulate colour
-  int32_t parameter_2 = adc.channel(1) << 3; 
+  // (centered when the COLOR knob/CV is routed to the filter)
+  int32_t parameter_2 = color_to_filter ? 16384 : adc.channel(1) << 3;
   if (modulator1_mode == 2) {
 	 parameter_2 -= (ad_value * settings.mod1_color_depth()) >> 9;
   } else {
@@ -659,6 +674,7 @@ void RenderBlock() {
 		ui.set_meta_shape(osc_shape);
 	  } else {
 		osc.set_shape(settings.shape());
+		ui.set_meta_shape(settings.shape());  // FMCV=META while FM drives the filter
 	  }
   } 
   
@@ -892,11 +908,29 @@ void RenderBlock() {
   }
      
   // Output filter (TPT SVF). Cutoff is summed in the pitch domain:
-  // FCUT + keyboard tracking + MOD1/MOD2 depth + FM CV (FMCV = FLTR).
+  // base (FCUT, or the TIMBRE/COLOR knob + CV) + FM CV + keyboard tracking
+  // + MOD1/MOD2 depth. Resonance: FRES or knob, + FM CV.
   OutputFilterMode filter_mode = static_cast<OutputFilterMode>(
       settings.GetValue(SETTING_FILTER_MODE));
+  int32_t cutoff = int32_t(settings.GetValue(SETTING_FILTER_CUTOFF)) << 7;
+  int32_t resonance =
+      int32_t(settings.GetValue(SETTING_FILTER_RESONANCE)) << 8;
+  if (cutoff_control == FILTER_CONTROL_TIMBRE) {
+    cutoff = adc.channel(0) * (127 << 7) >> 12;
+  } else if (cutoff_control == FILTER_CONTROL_COLOR) {
+    cutoff = adc.channel(1) * (127 << 7) >> 12;
+  } else if (cutoff_control == FILTER_CONTROL_FM) {
+    cutoff += settings.adc_to_fm(adc.channel(3));
+  }
+  if (resonance_control == FILTER_CONTROL_TIMBRE) {
+    resonance = adc.channel(0) << 3;
+  } else if (resonance_control == FILTER_CONTROL_COLOR) {
+    resonance = adc.channel(1) << 3;
+  } else if (resonance_control == FILTER_CONTROL_FM) {
+    resonance += settings.adc_to_fm(adc.channel(3)) << 3;
+  }
+  cutoff += 12 << 7;
   if (filter_mode != OUTPUT_FILTER_OFF || output_filter.active()) {
-    int32_t cutoff = (12 + settings.GetValue(SETTING_FILTER_CUTOFF)) << 7;
     int32_t tracking = settings.GetValue(SETTING_FILTER_TRACKING);
     cutoff += ((osc_pitch - (60 << 7)) * tracking) >> 1;
     // Depth 0..62 (31 = none). Full depth = about +/-124 semitones.
@@ -908,10 +942,6 @@ void RenderBlock() {
     if (modulator2_mode && env2_depth) {
       cutoff += (env2_depth * int32_t(ad2_value)) >> 7;
     }
-    if (meta_mod == 18) {
-      cutoff += settings.adc_to_fm(adc.channel(3));
-    }
-    int32_t resonance = int32_t(settings.GetValue(SETTING_FILTER_RESONANCE)) << 8;
     output_filter.Configure(filter_mode, cutoff, resonance);
   }
   bool filter_active = output_filter.active();
@@ -919,6 +949,7 @@ void RenderBlock() {
   // Copy to DAC buffer with sample rate and bit reduction applied,
   // then the output filter (smooths the bit-crush/decimation staircase).
   int16_t sample = 0;
+  int32_t peak = 0;
   size_t decimation_factor = decimation_factors[sample_rate_value];  
   uint16_t bit_mask = bit_reduction_masks[bits_value];
   for (size_t i = 0; i < kBlockSize; ++i) {
@@ -926,8 +957,22 @@ void RenderBlock() {
        sample = render_buffer[i] & bit_mask;
     }
     int16_t filtered = filter_active ? output_filter.Process(sample) : sample;
-    render_buffer[i] = static_cast<int32_t>(filtered) * gain >> 16;
+    int32_t out = static_cast<int32_t>(filtered) * gain >> 16;
+    render_buffer[i] = out;
+    if (out < 0) out = -out;
+    if (out > peak) peak = out;
   }
+
+  // Display feedback (popups, scope and dials).
+  int32_t cutoff_display = (cutoff >> 7) - 12;
+  ui.UpdateFeedback(
+      parameter_1,
+      parameter_2,
+      ParamClip(cutoff_display, int32_t(0), int32_t(127)),
+      ParamClip(resonance >> 8, int32_t(0), int32_t(127)),
+      ad_value,
+      ad2_value,
+      peak);
   render_block = (render_block + 1) % kNumBlocks;
   // debug_pin.Low();
 }

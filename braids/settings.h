@@ -74,10 +74,15 @@ enum MacroOscillatorShape {
 
   MACRO_OSC_SHAPE_CLOCKED_NOISE,
   MACRO_OSC_SHAPE_GRANULAR_CLOUD,
+  MACRO_OSC_SHAPE_VOWEL_MORPH,
+  MACRO_OSC_SHAPE_VOSIM_PLUS,
+  MACRO_OSC_SHAPE_DRIFT_SWARM,
+  MACRO_OSC_SHAPE_FOLD_DRONE,
+  MACRO_OSC_SHAPE_SPECTRAL_DRONE,
   MACRO_OSC_SHAPE_SILENCE,
 
   MACRO_OSC_SHAPE_LAST,
-  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_GRANULAR_CLOUD
+  MACRO_OSC_SHAPE_LAST_ACCESSIBLE_FROM_META = MACRO_OSC_SHAPE_SPECTRAL_DRONE
 };
 
 enum Resolution {
@@ -232,13 +237,33 @@ enum Setting {
   SETTING_FILTER_TRACKING,
   SETTING_FILTER_ENV1,
   SETTING_FILTER_ENV2,
-  SETTING_LAST_EDITABLE_SETTING = SETTING_FILTER_ENV2,
+  SETTING_FILTER_CUTOFF_CONTROL,
+  SETTING_FILTER_RESONANCE_CONTROL,
+  SETTING_DISPLAY_VIEW,
+  SETTING_LAST_EDITABLE_SETTING = SETTING_DISPLAY_VIEW,
   
   // Not settings per se, but used for menu display!
   SETTING_CALIBRATION,
   SETTING_CV_TESTER,
   SETTING_VERSION,
   SETTING_LAST,
+};
+
+// Physical control that drives the output filter cutoff or resonance.
+enum FilterControlSource {
+  FILTER_CONTROL_MENU,    // FCUT / FRES menu value only
+  FILTER_CONTROL_FM,      // FM CV (+ FM attenuverter) offsets the menu value
+  FILTER_CONTROL_TIMBRE,  // TIMBRE knob + CV, absolute; engine timbre centered
+  FILTER_CONTROL_COLOR,   // COLOR knob + CV, absolute; engine color centered
+  FILTER_CONTROL_LAST
+};
+
+enum DisplayView {
+  DISPLAY_VIEW_NAME,    // engine name only (original behavior)
+  DISPLAY_VIEW_PARAM,   // engine name + parameter popups
+  DISPLAY_VIEW_SCOPE,   // scrolling output level + popups
+  DISPLAY_VIEW_DIALS,   // needles: TIMBRE, COLOR, MOD1, MOD2 + popups
+  DISPLAY_VIEW_LAST
 };
 
 struct SettingsData {
@@ -333,6 +358,9 @@ struct SettingsData {
   uint8_t filter_tracking;   // 0 = OFF, 1 = HALF, 2 = FULL
   uint8_t filter_env1;       // 0..62, 31 = no MOD1 -> cutoff
   uint8_t filter_env2;       // 0..62, 31 = no MOD2 -> cutoff
+  uint8_t filter_cutoff_control;     // FilterControlSource
+  uint8_t filter_resonance_control;  // FilterControlSource
+  uint8_t display_view;              // DisplayView
   uint8_t extra_padding;
   int32_t pitch_cv_offset; 
   int32_t pitch_cv_scale; 

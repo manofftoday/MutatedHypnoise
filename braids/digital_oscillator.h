@@ -76,6 +76,11 @@ enum DigitalOscillatorShape {
   OSC_SHAPE_WAVE_PARAPHONIC,
   OSC_SHAPE_CLOCKED_NOISE,
   OSC_SHAPE_GRANULAR_CLOUD,
+  OSC_SHAPE_VOWEL_MORPH,
+  OSC_SHAPE_VOSIM_PLUS,
+  OSC_SHAPE_DRIFT_SWARM,
+  OSC_SHAPE_FOLD_DRONE,
+  OSC_SHAPE_SPECTRAL_DRONE,
   OSC_SHAPE_SILENCE,
 
   // Leave this here because it marks the end of the oscillator model list.
@@ -188,6 +193,45 @@ struct ClockedNoiseState {
   int16_t sample;
 };
 
+// MutatedHypnoise engines.
+struct VowelMorphState {
+  uint32_t formant_phase[3];
+  uint32_t formant_increment[3];
+  int16_t formant_amplitude[3];
+  int32_t dc;
+};
+
+struct VosimPlusState {
+  uint32_t pulse_phase;
+  uint32_t pulse_increment;
+  int32_t amplitude;
+  int32_t dc;
+};
+
+static const size_t kNumDriftVoices = 7;
+
+struct DriftSwarmState {
+  uint32_t phase[kNumDriftVoices];
+  int32_t drift[kNumDriftVoices];
+  int16_t target[kNumDriftVoices];
+  uint16_t counter;
+};
+
+struct FoldDroneState {
+  uint32_t phase[2];
+  uint32_t lfo_phase;
+  int32_t burst;
+};
+
+static const size_t kNumSpectralPartials = 8;
+
+struct SpectralDroneState {
+  uint32_t phase[kNumSpectralPartials];
+  uint32_t increment[kNumSpectralPartials];
+  int32_t amplitude[kNumSpectralPartials];
+  uint32_t shimmer_phase;
+};
+
 struct HatState {
   uint32_t phase[6];
   uint32_t rng_state;
@@ -209,6 +253,11 @@ union DigitalOscillatorState {
   // DigitalModulationState dmd;
   ClockedNoiseState clk;
   HatState hat;
+  VowelMorphState vmf;
+  VosimPlusState vsp;
+  DriftSwarmState dsw;
+  FoldDroneState fdr;
+  SpectralDroneState spc;
   uint32_t modulator_phase;
 };
 
@@ -292,6 +341,12 @@ class DigitalOscillator {
   void RenderGranularCloud(const uint8_t*, int16_t*, uint8_t);
   // void RenderParticleNoise(const uint8_t*, int16_t*, uint8_t);
   
+  void RenderVowelMorph(const uint8_t*, int16_t*, uint8_t);
+  void RenderVosimPlus(const uint8_t*, int16_t*, uint8_t);
+  void RenderDriftSwarm(const uint8_t*, int16_t*, uint8_t);
+  void RenderFoldDrone(const uint8_t*, int16_t*, uint8_t);
+  void RenderSpectralDrone(const uint8_t*, int16_t*, uint8_t);
+
   void RenderQuestionMark(const uint8_t*, int16_t*, uint8_t);
  
   void RenderSilence(const uint8_t*, int16_t*, uint8_t);

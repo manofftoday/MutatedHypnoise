@@ -416,6 +416,15 @@ MacroOscillator::RenderFn MacroOscillator::fn_table_[] = {
   &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderDigital,
   &MacroOscillator::RenderDigital,
+  &MacroOscillator::RenderDigital,  // VMRF
+  &MacroOscillator::RenderDigital,  // VOS2
+  &MacroOscillator::RenderDigital,  // DSWM
+  &MacroOscillator::RenderDigital,  // FDRN
+  &MacroOscillator::RenderDigital,  // SPEC
 };
+
+static_assert(MACRO_OSC_SHAPE_SILENCE - MACRO_OSC_SHAPE_SAW_SWARM ==
+              OSC_SHAPE_SILENCE,
+              "Digital block of MacroOscillatorShape out of sync");
 
 }  // namespace braids

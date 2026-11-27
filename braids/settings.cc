@@ -32,6 +32,7 @@
 
 #include "braids/settings.h"
 
+#include <cstddef>
 #include <cstring>
 
 // Replace with custom storage for version 4.1 and later
@@ -132,6 +133,9 @@ const SettingsData kInitSettings = {
   0,                    // filter_tracking = OFF
   31,                   // filter_env1 = 0
   31,                   // filter_env2 = 0
+  0,                    // filter_cutoff_control = MENU
+  0,                    // filter_resonance_control = MENU
+  1,                    // display_view = PARM
   0,                    // padding
   50,                   // pitch_cv_offset
   15401,                // pitch_cv_scale
@@ -211,6 +215,11 @@ const char* const algo_values[] = {
     "WTx4",
     "CLKN",
     "CLOU",
+    "VMRF", // vowel morph + formant shift
+    "VOS2", // VOSIM with decaying pulse train
+    "DSWM", // drift swarm
+    "FDRN", // fold drone
+    "SPEC", // spectral (additive) drone
     "ZERO", // RenderSilence
 };
 
@@ -509,12 +518,15 @@ const char* const meta_values[] = {
     "SRAT", // 15 
     "SMUT", // 16 = BITS + SRAT 
     "FCKD", // 17 = BITS + SRAT + JITR 
-    "FLTR", // 18 = output filter cutoff
 };
 
 const char* const filter_mode_values[] = { "OFF", "LPF", "HPF", "BPF" };
 
 const char* const filter_tracking_values[] = { "OFF", "HALF", "FULL" };
+
+const char* const filter_control_values[] = { "MENU", "FM", "TIMB", "COLR" };
+
+const char* const display_view_values[] = { "NAME", "PARM", "SCOP", "DIAL" };
 
 const char* const mod_shape_values[] = { 
     "EXPO",  // 0 exponentially-curved triangle
@@ -607,7 +619,7 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 1, "RINV", boolean_values },
   { 0, 1, "TSRC", trig_source_values },
   { 0, 6, "TDLY", trig_delay_values },
-  { 0, 18, "FMCV", meta_values },
+  { 0, 17, "FMCV", meta_values },
   { 0, 4, "RANG", pitch_range_values }, // enable LFO pitch range
   { 0, 4, "OCTV", octave_values },
   { 0, PITCH_QUANTIZATION_LAST - 1, "QNTZ", quantization_values },
@@ -691,9 +703,12 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 2, "FTRK", filter_tracking_values },
   { 0, 62, "FEN1", bipolar_values },
   { 0, 62, "FEN2", bipolar_values },
+  { 0, FILTER_CONTROL_LAST - 1, "FCTL", filter_control_values },
+  { 0, FILTER_CONTROL_LAST - 1, "QCTL", filter_control_values },
+  { 0, DISPLAY_VIEW_LAST - 1, "VIEW", display_view_values },
   { 0, 0, "CAL.", NULL },
   { 0, 0, "    ", NULL },  // Placeholder for CV tester
-  { 0, 0, "h0.1", NULL },  // Placeholder for version string
+  { 0, 0, "h0.2", NULL },  // Placeholder for version string
 };
 
 /* static */
@@ -707,6 +722,8 @@ const Setting Settings::settings_order_[] = {
   SETTING_FILTER_TRACKING,
   SETTING_FILTER_ENV1,
   SETTING_FILTER_ENV2,
+  SETTING_FILTER_CUTOFF_CONTROL,
+  SETTING_FILTER_RESONANCE_CONTROL,
   SETTING_MOD1_MODE,
   SETTING_MOD1_RATE,
   SETTING_MOD1_AD_RATIO,
@@ -732,6 +749,7 @@ const Setting Settings::settings_order_[] = {
   SETTING_OSC_SYNC,
   SETTING_RATE_INVERSION, 
   SETTING_BRIGHTNESS, 
+  SETTING_DISPLAY_VIEW,
   SETTING_EDIT_WRAP,
   SETTING_CALIBRATION,
   SETTING_CV_TESTER,
@@ -794,5 +812,13 @@ const Setting Settings::settings_order_[] = {
 
 /* extern */
 Settings settings;
+
+// GetValue()/SetValue() index SettingsData by byte offset.
+static_assert(offsetof(SettingsData, edit_wrap) == SETTING_EDIT_WRAP,
+              "SettingsData and Setting enum out of sync");
+static_assert(offsetof(SettingsData, display_view) == SETTING_DISPLAY_VIEW,
+              "SettingsData and Setting enum out of sync");
+static_assert(sizeof(algo_values) / sizeof(algo_values[0]) ==
+              MACRO_OSC_SHAPE_LAST, "algo_values and shapes out of sync");
 
 }  // namespace braids
