@@ -540,7 +540,7 @@ const SettingMetadata Settings::metadata_[] = {
   { 0, 0, "CAL.", NULL },
   { 0, 0, "    ", NULL },  // Placeholder for CV tester
   { 0, 0, "LOAD", NULL },  // CPU load meter
-{ 0, 0, "h0.4", NULL },  // Placeholder for version string
+{ 0, 0, "h0.5", NULL },  // Placeholder for version string
 };
 
 // Menu order: engine, its three advanced parameters, the output stage

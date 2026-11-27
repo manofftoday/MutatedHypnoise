@@ -118,9 +118,9 @@ void Ui::DetectControlMovement(uint32_t now) {
   static const uint8_t kSource[] = {
     FILTER_CONTROL_TIMBRE, FILTER_CONTROL_COLOR, FILTER_CONTROL_FM, 0xff
   };
-  // Performance mode: FINE = cutoff, FM = resonance.
+  // Performance mode: COLOR = cutoff, FM = resonance.
   bool performance = settings.GetValue(SETTING_PERFORMANCE_MODE);
-  uint8_t cutoff_control = performance ? 0xff :
+  uint8_t cutoff_control = performance ? FILTER_CONTROL_COLOR :
       settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
   uint8_t resonance_control = performance ? FILTER_CONTROL_FM :
       settings.GetValue(SETTING_FILTER_RESONANCE_CONTROL);
@@ -137,7 +137,7 @@ void Ui::DetectControlMovement(uint32_t now) {
     if (now - gesture_start_[i] > kMaxGesture) {
       continue;  // moving for too long: automation, no popup
     }
-    if (cutoff_control == kSource[i] || (performance && i == 3)) {
+    if (cutoff_control == kSource[i]) {
       popup_feedback_ = FEEDBACK_CUTOFF;
       popup_letter_ = 'F';
     } else if (resonance_control == kSource[i]) {

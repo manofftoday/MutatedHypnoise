@@ -201,7 +201,10 @@ class OutputFilter {
 
   // (a * b + c * d) >> 30 with 32 x 32 -> 64 multiplies (SMULL + SMLAL).
   static inline int32_t MulAdd30(int32_t a, int32_t b, int32_t c, int32_t d) {
-    int64_t acc = static_cast<int64_t>(a) * static_cast<int64_t>(b);
+    // Rounded (the 1/2 LSB offset), so the truncation does not leave a DC
+    // bias circulating in the integrators.
+    int64_t acc = static_cast<int64_t>(1 << 29);
+    acc += static_cast<int64_t>(a) * static_cast<int64_t>(b);
     acc += static_cast<int64_t>(c) * static_cast<int64_t>(d);
     return static_cast<int32_t>(acc >> 30);
   }
@@ -280,7 +283,15 @@ class OutputFilter {
     // 2^32 / (D * 2^14) is a1 in Q18 (relative error < 2^-14).
     uint32_t d = kOneQ28 + static_cast<uint32_t>(
         static_cast<int64_t>(g) * (g + k_) >> 28);
-    a1_ = static_cast<int32_t>((0xffffffffUL / (d >> 14)) << 12);
+    int32_t a1 = static_cast<int32_t>((0xffffffffUL / (d >> 14)) << 12);
+    // One Newton-Raphson step, a1 <- a1 (2 - D a1): relative error from
+    // 2^-14 to ~2^-27. At low cutoff + high resonance 1 - a1 is ~g k,
+    // smaller than 2^-14, and the coarse a1 left the filter undamped
+    // (limit cycles that never decayed).
+    int32_t e = static_cast<int32_t>(
+        static_cast<int64_t>(d) * a1 >> 28);  // D a1, Q30 (~2^30)
+    a1_ = static_cast<int32_t>(
+        static_cast<int64_t>(a1) * ((1L << 31) - e) >> 30);
     a2_ = static_cast<int32_t>(static_cast<int64_t>(g) * a1_ >> 28);
     a3_ = static_cast<int32_t>(static_cast<int64_t>(g) * a2_ >> 28);
 

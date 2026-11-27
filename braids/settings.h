@@ -259,7 +259,7 @@ struct SettingsData {
   uint8_t filter_tracking;   // 0 = OFF, 1 = HALF, 2 = FULL
   uint8_t filter_cutoff_control;     // FilterControlSource
   uint8_t filter_resonance_control;  // FilterControlSource
-  uint8_t performance_mode;  // FINE = cutoff, FM = resonance
+  uint8_t performance_mode;  // COLOR = cutoff, FM = resonance
   uint8_t display_view;      // DisplayView
   uint8_t fold;              // output stage, 0 = bypass
   uint8_t drive;

@@ -160,6 +160,30 @@ static void TestFilterStability() {
     Check(tail <= 2, label, tail);
   }
 
+  // Low cutoff + high resonance: with the coarse a1 (1/D to 2^-14) the
+  // filter was undamped there and kept limit cycles of hundreds of LSB.
+  // After a noise burst and 5 s of silence, only a tiny DC may remain.
+  int32_t worst_tail = 0;
+  for (size_t m = 0; m < 3; ++m) {
+    for (int32_t c = 12; c <= 42; c += 3) {
+      OutputFilter f;
+      f.Init();
+      uint32_t rng = 1;
+      for (size_t b = 0; b < 6 * kSampleRate / kBlockSize; ++b) {
+        f.Configure(modes[m], c << 7, 126 << 8);
+        for (size_t i = 0; i < kBlockSize; ++i) {
+          rng = rng * 1664525 + 1013904223;
+          int16_t x = b < 400 ? static_cast<int16_t>(rng >> 16) : 0;
+          int32_t y = f.Process(x);
+          if (b > 5 * kSampleRate / kBlockSize && abs(y) > worst_tail) {
+            worst_tail = abs(y);
+          }
+        }
+      }
+    }
+  }
+  Check(worst_tail <= 8, "low cutoff + max resonance falls silent", worst_tail);
+
   // OFF -> LP -> OFF must not jump: max step between samples during the
   // crossfade stays small for a constant (DC) input.
   OutputFilter f;

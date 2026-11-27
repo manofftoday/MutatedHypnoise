@@ -304,12 +304,14 @@ void RenderBlock() {
   // the filter (performance mode, FCTL = FM or QCTL = FM).
   uint8_t fm_destination = settings.GetValue(SETTING_META_MODULATION);
   bool performance = settings.GetValue(SETTING_PERFORMANCE_MODE);
-  uint8_t cutoff_control = performance ? uint8_t(FILTER_CONTROL_MENU) :
+  // Performance mode: COLOR knob (+ COLOR CV) = cutoff, FM CV = resonance
+  // on top of FRES. (FINE is summed in analog with V/OCT on uBraids and
+  // most Braids: the firmware cannot read it, so it stays fine tune.)
+  uint8_t cutoff_control = performance ? uint8_t(FILTER_CONTROL_COLOR) :
       settings.GetValue(SETTING_FILTER_CUTOFF_CONTROL);
-  uint8_t resonance_control = performance ? uint8_t(FILTER_CONTROL_MENU) :
+  uint8_t resonance_control = performance ? uint8_t(FILTER_CONTROL_FM) :
       settings.GetValue(SETTING_FILTER_RESONANCE_CONTROL);
-  if (performance ||
-      cutoff_control == FILTER_CONTROL_FM ||
+  if (cutoff_control == FILTER_CONTROL_FM ||
       resonance_control == FILTER_CONTROL_FM) {
     fm_destination = 0xff;  // FM CV drives the filter: no FMCV destination.
   }
@@ -318,7 +320,7 @@ void RenderBlock() {
       resonance_control == FILTER_CONTROL_TIMBRE;
   bool color_to_filter = cutoff_control == FILTER_CONTROL_COLOR ||
       resonance_control == FILTER_CONTROL_COLOR;
-  // FINE knob: fine tune, or the filter cutoff in performance mode. Read
+  // FINE knob (only on hardware where the MCU reads it): fine tune. Read
   // once per block (the driver smooths at each read).
   int32_t fine = internal_adc.value();  // ~ -32768..32767
 
@@ -392,9 +394,7 @@ void RenderBlock() {
   if (fm_destination == FM_DESTINATION_FREQ) {
     pitch += fm;
   }
-  if (!performance) {
-    pitch += fine >> 8;
-  }
+  pitch += fine >> 8;
 
   // Check if the pitch has changed to cause an auto-retrigger
   int32_t pitch_delta = pitch - previous_pitch;
@@ -512,34 +512,28 @@ void RenderBlock() {
   }
 
   // Output filter (TPT SVF). Cutoff is summed in the pitch domain:
-  // base (FCUT, the TIMBRE/COLOR knob + CV, or FINE in performance mode)
-  // + FM CV + keyboard tracking. Resonance: FRES or knob, + FM CV.
+  // base (FCUT, or the TIMBRE/COLOR knob, which is the offset of its CV)
+  // + FM CV + keyboard tracking. Resonance: FRES or knob, + FM CV (the FM
+  // attenuverter only scales the FM CV: with nothing patched FCUT/FRES
+  // are the offsets).
   OutputFilterMode filter_mode = static_cast<OutputFilterMode>(
       settings.GetValue(SETTING_FILTER_MODE));
   int32_t cutoff = int32_t(settings.GetValue(SETTING_FILTER_CUTOFF)) << 7;
   int32_t resonance =
       int32_t(settings.GetValue(SETTING_FILTER_RESONANCE)) << 8;
-  if (performance) {
-    // FINE sweeps the whole range; FM CV (and its attenuverter) adds
-    // resonance on top of FRES.
-    cutoff = (ParamClip(fine, int32_t(-32768), int32_t(32767)) + 32768) *
-        (127 << 7) >> 16;
+  if (cutoff_control == FILTER_CONTROL_TIMBRE) {
+    cutoff = adc.channel(0) * (127 << 7) >> 12;
+  } else if (cutoff_control == FILTER_CONTROL_COLOR) {
+    cutoff = adc.channel(1) * (127 << 7) >> 12;
+  } else if (cutoff_control == FILTER_CONTROL_FM) {
+    cutoff += fm;
+  }
+  if (resonance_control == FILTER_CONTROL_TIMBRE) {
+    resonance = adc.channel(0) << 3;
+  } else if (resonance_control == FILTER_CONTROL_COLOR) {
+    resonance = adc.channel(1) << 3;
+  } else if (resonance_control == FILTER_CONTROL_FM) {
     resonance += fm << 3;
-  } else {
-    if (cutoff_control == FILTER_CONTROL_TIMBRE) {
-      cutoff = adc.channel(0) * (127 << 7) >> 12;
-    } else if (cutoff_control == FILTER_CONTROL_COLOR) {
-      cutoff = adc.channel(1) * (127 << 7) >> 12;
-    } else if (cutoff_control == FILTER_CONTROL_FM) {
-      cutoff += fm;
-    }
-    if (resonance_control == FILTER_CONTROL_TIMBRE) {
-      resonance = adc.channel(0) << 3;
-    } else if (resonance_control == FILTER_CONTROL_COLOR) {
-      resonance = adc.channel(1) << 3;
-    } else if (resonance_control == FILTER_CONTROL_FM) {
-      resonance += fm << 3;
-    }
   }
   cutoff += 12 << 7;
   if (filter_mode != OUTPUT_FILTER_OFF || output_filter.active()) {
